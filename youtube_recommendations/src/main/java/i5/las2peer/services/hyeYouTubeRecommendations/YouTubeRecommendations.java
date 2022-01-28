@@ -5,24 +5,16 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.Iterator;
 
-import javax.print.attribute.standard.Media;
 import javax.ws.rs.*;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 
 import com.google.api.client.googleapis.auth.oauth2.GoogleAuthorizationCodeFlow;
 import com.google.api.client.http.*;
-import com.google.api.client.json.Json;
-import com.google.auth.http.HttpCredentialsAdapter;
-import com.google.auth.oauth2.GoogleCredentials;
-import com.google.gson.Gson;
 import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import i5.las2peer.api.Context;
-import i5.las2peer.execution.ExecutionContext;
 import i5.las2peer.logging.L2pLogger;
 import i5.las2peer.api.ManualDeployment;
 import i5.las2peer.api.security.UserAgent;
@@ -30,7 +22,8 @@ import i5.las2peer.restMapper.RESTService;
 import i5.las2peer.restMapper.annotations.ServicePath;
 
 import i5.las2peer.services.hyeYouTubeRecommendations.util.TokenWrapper;
-import i5.las2peer.services.hyeYouTubeRecommendations.util.YouTubeApiWrapper;
+import i5.las2peer.services.hyeYouTubeRecommendations.youTubeData.YouTubeApiWrapper;
+import i5.las2peer.services.hyeYouTubeRecommendations.youTubeData.YouTubeVideo;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
 import io.swagger.annotations.ApiResponse;
@@ -41,13 +34,8 @@ import io.swagger.annotations.License;
 import io.swagger.annotations.SwaggerDefinition;
 
 import com.google.api.client.auth.oauth2.*;
-import com.google.api.client.googleapis.auth.oauth2.GoogleAuthorizationCodeFlow.Builder;
-import com.google.api.client.googleapis.auth.oauth2.GoogleTokenResponse;
 import com.google.api.client.http.apache.v2.ApacheHttpTransport;
 import com.google.api.client.json.gson.GsonFactory;
-import com.google.api.services.youtube.YouTube;
-import com.google.api.services.youtube.YouTube.*;
-import com.google.api.services.youtube.YouTubeRequest;
 
 /**
  * HyE - YouTube Recommendations
@@ -102,6 +90,7 @@ public class YouTubeRecommendations extends RESTService {
 		flow = new GoogleAuthorizationCodeFlow.Builder(transport, json, this.clientId, this.clientSecret,
 				Arrays.asList("https://www.googleapis.com/auth/youtube")).setAccessType("offline").build();
 		ytConnections = new HashMap<String, YouTubeApiWrapper>();
+		YouTubeApiWrapper.setApiKey(apiKey);
 	}
 
 	/**
@@ -176,17 +165,16 @@ public class YouTubeRecommendations extends RESTService {
 	}
 
 	/**
-	 * Helper function to update local data storage with relevant YouTube watch data for given user
+	 * Helper function to update local data storage with relevant YouTube watch data a given user
 	 *
-	 * @param user The las2peer Agent of the user in question
-	 * @return YouTube Data which was stored
+	 * @param ytConnection The YouTube connection stored for the user in question
+	 * @return Amount of video data objects updated
 	 */
-	private JsonArray synchronizeYouTubeData(UserAgent user) {
-		// TODO research YouTube playlists, because if they're just used for music, it doesn't make that much sense to include them here
-		JsonArray videos = parseVideoData(getLikedVideos(), getDisikedVideos(), getPlaylists(), getSubscriptions());
-		JsonArray comments = YouTubeApiWrapper.getComments(flow.getRequestInitializer());
+	private int synchronizeYouTubeData(YouTubeApiWrapper ytConnection) {
+		HashMap<String, ArrayList<YouTubeVideo>> videoData = ytConnection.getYouTubeWatchData();
+		//JsonArray comments = YouTubeApiWrapper.getComments("videoId", flow.getRequestInitializer(), apiKey);
 		// TODO synchronize data base
-		return videos;
+		return videoData.size();
 	}
 
 	// TODO implement ratings (videos of subscribed channel 1, videos in playlist 2, liked video 3, disliked video -1), "finMatch" method using inverted matrix factorization and semantic similarity based on word embeddings, MySQL data base connection
@@ -255,25 +243,12 @@ public class YouTubeRecommendations extends RESTService {
 
 		YouTubeApiWrapper ytConnection = getConnection(user);
 		if (ytConnection == null || !ytConnection.intactConnection()) {
-			// If no valid connection exists redirect user to login
-			
+			return Response.status(403).entity("No valid login data stored for user! Please login to YouTube and come" +
+					" back afterwards.").build();
 		}
 		try {
-			synchronizeYouTubeData(user);
-		} catch (Exception e) {
-			log.printStackTrace(e);
-			return Response.status(403).entity("Authentication failed").build();
-		}
-
-		if (credential == null) {
-			return Response.status(401).entity("No valid access token for user.").build();
-		}
-
-		JsonObject response = new JsonObject();
-		try {
-			// TODO implement data storage
-			log.info("Nothing to do...");
-			return Response.ok().entity(response).build();
+			synchronizeYouTubeData(ytConnection);
+			return Response.ok().entity("YouTube Data successfully synchronized.").build();
 		} catch (Exception e) {
 			log.printStackTrace(e);
 			return Response.status(500).entity("Unspecified server error").build();
@@ -295,9 +270,9 @@ public class YouTubeRecommendations extends RESTService {
 			value = { @ApiResponse(
 					code = HttpURLConnection.HTTP_OK,
 					message = "OK") })
-	public Response login() {
-		String redirectUrl = flow.newAuthorizationUrl().setRedirectUri(AUTH_URI).build();
-		return Response.temporaryRedirect(URI.create(redirectUrl)).build();
+	public Response login(@DefaultValue(ROOT_URI) @QueryParam("redirect_uri") String redirectUri) {
+		String redirectUrl = flow.newAuthorizationUrl().setRedirectUri(redirectUri).build();
+		return Response.temporaryRedirect(URI.create(AUTH_URI)).build();
 	}
 
 	/**
@@ -317,7 +292,8 @@ public class YouTubeRecommendations extends RESTService {
 			value = { @ApiResponse(
 					code = HttpURLConnection.HTTP_OK,
 					message = "OK") })
-	public Response auth(@QueryParam("code") String code) {
+	public Response auth(@QueryParam("code") String code,
+						 @DefaultValue(ROOT_URI) @QueryParam("redirect_uri") String redirectUri) {
 		// Test authorization code
 		TokenResponse token = getAccessToken(code);
 		if (token == null) {
@@ -336,6 +312,6 @@ public class YouTubeRecommendations extends RESTService {
 			return Response.serverError().entity("Error storing access token.").build();
 		}
 
-		return Response.ok().entity(tokenWrapper.toString()).build();
+		return Response.temporaryRedirect(URI.create(redirectUri)).build();
 	}
 }
