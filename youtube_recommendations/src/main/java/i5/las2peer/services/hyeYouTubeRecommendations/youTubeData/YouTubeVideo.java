@@ -12,17 +12,17 @@ import java.util.Arrays;
  */
 
 public class YouTubeVideo {
-    String videoId;
-    String channelId;
-    String title;
-    String description;
-    String thumbnailUrl;
-    String[] tags;
-    String categoryId;
-    String uploadDate;
+    private String videoId;
+    private String channelId;
+    private String title;
+    private String description;
+    private String thumbnailUrl;
+    private String[] tags;
+    private int categoryId;
+    private String uploadDate;
 
     public YouTubeVideo(String videoId, String channelId, String title, String description, String thumbnailUrl,
-                        String[] tags, String categoryId, String uploadDate) {
+                        String[] tags, int categoryId, String uploadDate) {
         this.videoId = videoId;
         this.channelId = channelId;
         this.title = title;
@@ -81,11 +81,11 @@ public class YouTubeVideo {
         this.tags = tags;
     }
 
-    public String getCategoryId() {
+    public int getCategoryId() {
         return categoryId;
     }
 
-    public void setCategoryId(String categoryId) {
+    public void setCategoryId(int categoryId) {
         this.categoryId = categoryId;
     }
 
@@ -99,18 +99,18 @@ public class YouTubeVideo {
 
     public boolean isComplete() {
         return videoId != null && channelId != null && title != null && description != null && thumbnailUrl != null &&
-                tags != null && categoryId != null && uploadDate != null;
+                tags != null && categoryId != -1 && uploadDate != null;
     }
 
     @Override
     public String toString() {
-        return "{\"VideoId\":\"" + videoId + "\"," +
-            "\"ChannelId\":\"" + channelId + "\"," +
-            "\"Title\":\"" + title + "\"," +
-            "\"Description\":\"" + description + "\"," +
-            "\"ThumbnailUrl\":\"" + thumbnailUrl + "\"," +
-            "\"Tags\":" + Arrays.toString(tags) + "," +
-            "\"CategoryId\":\"" + categoryId + "\"," +
-            "\"UploadDate\":\"" + uploadDate + "\"";
+        return "{\"videoId\":\"" + videoId + "\"," +
+            "\"channelId\":\"" + channelId + "\"," +
+            "\"title\":\"" + title + "\"," +
+            "\"description\":\"" + description + "\"," +
+            "\"thumbnailUrl\":\"" + thumbnailUrl + "\"," +
+            "\"tags\":" + Arrays.toString(tags) + "," +
+            "\"categoryId\":\"" + categoryId + "\"," +
+            "\"uploadDate\":\"" + uploadDate + "\"";
     }
 }

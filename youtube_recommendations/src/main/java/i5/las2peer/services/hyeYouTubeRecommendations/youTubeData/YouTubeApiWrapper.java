@@ -35,40 +35,8 @@ public class YouTubeApiWrapper {
     private static String apiKey;
 
     /**
-     * Retrieves the comments of the given YouTube video.
-     * Does not use user specific credentials, but a static API key instead.
-     *
-     * @param videoId The ID of the YouTube video from which we retrieve the comments
-     * @return Json Array of YouTube comments left under the YouTube video identified by the specified ID
-     */
-    public static JsonArray getComments(String videoId, HttpRequestInitializer initializer) {
-        if (apiKey == null)
-            return null;
-        try {
-            YouTube ytConnection = new YouTube.Builder(new ApacheHttpTransport(), new GsonFactory(), initializer)
-                    .setApplicationName("How's your Experience").build();
-            HttpRequest request = ytConnection.comments().list("snippet").set("videoId", videoId)
-                    .setMaxResults(Integer.toUnsignedLong(500)).setKey(apiKey).buildHttpRequest();
-            JsonObject response = new Gson().fromJson(request.execute().parseAsString(), JsonObject.class);
-            JsonArray comments = response.get("items").getAsJsonArray();
-            // Retrieving all comments might deplete quota too quickly
-//			while (response.has("nextPageToken")) {
-//				request = ytConnection.comments().list("snippet").set("videoId", videoId)
-//						.setMaxResults(Integer.toUnsignedLong(500))
-//						.setPageToken(response.get("nextPageToken").getAsString()).buildHttpRequest();
-//				response = new Gson().fromJson(request.execute().parseAsString(), JsonObject.class);
-//				comments.addAll(response.get("items").getAsJsonArray());
-//			}
-            return comments;
-        } catch (Exception e) {
-            log.printStackTrace(e);
-            return null;
-        }
-    }
-
-    /**
-     * Retrieves the details of the given YouTube video.
-     * Does not use user specific credentials, but a static API key instead.
+     * Retrieves the details of the given YouTube video
+     * Does not use user specific credentials, but a static API key instead
      *
      * @param videoIds The IDs of the YouTube videos which we are interested in
      * @return Json Array of video information of the YouTube videos identified by the specified IDs
@@ -84,14 +52,101 @@ public class YouTubeApiWrapper {
             HttpRequest request = ytConnection.comments().list("snippet").setId(videoIdString)
                     .setFields("items(snippet(title,description,tags,channelId,categoryId,publishedAt,thumbnails))")
                     .setMaxResults(Integer.toUnsignedLong(500)).setKey(apiKey).buildHttpRequest();
-            // TODO remove, this is just for debugging
-            System.out.println(request.getUrl());
             JsonObject response = new Gson().fromJson(request.execute().parseAsString(), JsonObject.class);
             return response.get("items").getAsJsonArray();
         } catch (Exception e) {
             log.printStackTrace(e);
             return null;
         }
+    }
+
+    /**
+     * Retrieves the comments of the given YouTube video
+     * Does not use user specific credentials, but a static API key instead
+     *
+     * @param videoId The ID of the YouTube video from which we retrieve the comments
+     * @return Json Array of YouTube comments left under the YouTube video identified by the specified ID
+     */
+    public static ArrayList<YouTubeComment> getComments(String videoId, HttpRequestInitializer initializer) {
+        if (apiKey == null)
+            return null;
+        JsonArray comments = new JsonArray();
+        try {
+            YouTube ytConnection = new YouTube.Builder(new ApacheHttpTransport(), new GsonFactory(), initializer)
+                    .setApplicationName("How's your Experience").build();
+            HttpRequest request = ytConnection.commentThreads().list("snippet").set("videoId", videoId)
+                    .setMaxResults(Integer.toUnsignedLong(500)).setKey(apiKey).buildHttpRequest();
+            JsonObject response = new Gson().fromJson(request.execute().parseAsString(), JsonObject.class);
+            comments = response.get("items").getAsJsonArray();
+            // Retrieving all comments might deplete quota too quickly
+//			while (response.has("nextPageToken")) {
+//				request = ytConnection.comments().list("snippet").set("videoId", videoId)
+//						.setMaxResults(Integer.toUnsignedLong(500))
+//						.setPageToken(response.get("nextPageToken").getAsString()).buildHttpRequest();
+//				response = new Gson().fromJson(request.execute().parseAsString(), JsonObject.class);
+//				comments.addAll(response.get("items").getAsJsonArray());
+//			}
+        } catch (Exception e) {
+            log.printStackTrace(e);
+            return null;
+        }
+        return parseCommentArray(comments);
+    }
+
+    /**
+     * Helper function to parse the information from the YouTube data API response to a video's comments
+     *
+     * @param commentArray The array returned by the getComments function
+     * @return YouTubeComments array with all relevant comment data
+     */
+    private static ArrayList<YouTubeComment> parseCommentArray(JsonArray commentArray) {
+        ArrayList<YouTubeComment> comments = new ArrayList<YouTubeComment>();
+        Iterator<JsonElement> it = commentArray.iterator();
+        while (it.hasNext())
+            comments.add(parseYtComment(it.next().getAsJsonObject()));
+        return comments;
+    }
+
+    /**
+     * Helper function to parse the information from a single comment returned by the YouTube data API
+     *
+     * @param commentObj The comment data as Json
+     * @return YouTubeComment object with all relevant data that was available
+     */
+    public static YouTubeComment parseYtComment(JsonObject commentObj) {
+        String id = null;
+        String videoId = null;
+        String content = null;
+        String channelId = null;
+        String publishDate = null;
+        int likeCount = -1;
+        if (commentObj.has("id"))
+            id = commentObj.get("id").getAsString();
+        JsonObject snippet = null;
+        if (commentObj.has("snippet"))
+            snippet = commentObj.get("snippet").getAsJsonObject();
+        else
+            return new YouTubeComment(id, null, null, null, null, -1);
+
+        if (snippet.has("videoId"))
+            videoId = snippet.get("videoId").getAsString();
+
+        if (snippet.has("topLevelComment") &&
+                snippet.get("topLevelComment").getAsJsonObject().has("snippet"))
+            snippet = snippet.get("topLevelComment").getAsJsonObject().get("snippet").getAsJsonObject();
+        else
+            return new YouTubeComment(id, videoId, null, null, null, -1);
+
+        if (snippet.has("textOriginal"))
+            content = snippet.get("textOriginal").getAsString();
+        if (snippet.has("authorChannelId") &&
+                snippet.get("authorChannelId").getAsJsonObject().has("value"))
+            channelId = snippet.get("authorChannelId").getAsJsonObject().get("value").getAsString();
+        if (snippet.has("publishedAt"))
+            publishDate = snippet.get("publishedAt").getAsString();
+        if (snippet.has("likeCount"))
+            likeCount = snippet.get("likeCount").getAsInt();
+        return new YouTubeComment(id, videoId, content, channelId, publishDate, likeCount);
     }
 
     public static JsonArray getVideoDetails(String videoId, HttpRequestInitializer initializer) {
@@ -123,7 +178,7 @@ public class YouTubeApiWrapper {
     }
 
     /**
-     * Retrieves the YouTube videos rated by the current user
+     * Retrieves the YouTube videos rated by the current user.
      *
      * @param rating A String either like or dislike indicating the rating
      * @return Json Array of YouTube videos liked by requesting user
@@ -265,46 +320,48 @@ public class YouTubeApiWrapper {
     }
 
     /**
-     * Helper function to parse the information from a single video object returned by the YouTube data API.
+     * Helper function to parse the information from a single video object returned by the YouTube data API
      *
+     * @param videoObj The video data as Json
      * @return YouTubeVideo object with all relevant video data that was available
      */
     private YouTubeVideo parseYtVideo(JsonObject videoObj) {
-        try {
-            String id = null;
-            String channelId = null;
-            String title = null;
-            String description = null;
-            String thumbnailUrl = null;
-            String[] tags = null;
-            String categoryId = null;
-            String publishedAt = null;
-            if (videoObj.has("id"))
-                id = videoObj.get("id").getAsString();
-            JsonObject snippet = null;
-            if (videoObj.has("snippet"))
-                snippet = videoObj.get("snippet").getAsJsonObject();
-            if (snippet.has("channelId"))
-                channelId = snippet.get("channelId").getAsString();
-            if (snippet.has("title"))
-                title = snippet.get("title").getAsString();
-            if (snippet.has("description"))
-                description = snippet.get("description").getAsString();
-            if (snippet.has("thumbnails") &&
-                snippet.get("thumbnails").getAsJsonObject().has("default") &&
-                snippet.get("thumbnails").getAsJsonObject().get("default").getAsJsonObject().has("url"))
-                    thumbnailUrl = snippet.get("thumbnails").getAsJsonObject().get("default").getAsJsonObject().get("url").getAsString();
-            if (snippet.has("tags"))
-                tags = snippet.get("tags").getAsJsonArray().toString().replaceAll("\\s", "").split(",");
-            if (snippet.has("categoryId"))
-                categoryId = snippet.get("categoryId").getAsString();
-            if (snippet.has("publishedAt"))
-                publishedAt = snippet.get("publishedAt").getAsString();
-            return new YouTubeVideo(id, channelId, title, description, thumbnailUrl, tags, categoryId, publishedAt);
-        } catch (Exception e) {
-            log.printStackTrace(e);
-            return null;
-        }
+        String id = null;
+        String channelId = null;
+        String title = null;
+        String description = null;
+        String thumbnailUrl = null;
+        String[] tags = null;
+        int categoryId = -1;
+        String publishedAt = null;
+        if (videoObj.has("id"))
+            id = videoObj.get("id").getAsString();
+        JsonObject snippet = null;
+        if (videoObj.has("snippet"))
+            snippet = videoObj.get("snippet").getAsJsonObject();
+        else
+            return new YouTubeVideo(id, null, null, null, null, null,
+                    -1, null);
+
+        if (snippet.has("channelId"))
+            channelId = snippet.get("channelId").getAsString();
+        if (snippet.has("title"))
+            title = snippet.get("title").getAsString();
+        if (snippet.has("description"))
+            description = snippet.get("description").getAsString();
+        if (snippet.has("thumbnails") &&
+            snippet.get("thumbnails").getAsJsonObject().has("default") &&
+            snippet.get("thumbnails").getAsJsonObject().get("default").getAsJsonObject().has("url"))
+                thumbnailUrl = snippet.get("thumbnails").getAsJsonObject().get("default").getAsJsonObject().get("url")
+                        .getAsString();
+        if (snippet.has("tags"))
+            tags = snippet.get("tags").getAsJsonArray().toString().replaceAll("\\s", "")
+                    .split(",");
+        if (snippet.has("categoryId"))
+            categoryId = snippet.get("categoryId").getAsInt();
+        if (snippet.has("publishedAt"))
+            publishedAt = snippet.get("publishedAt").getAsString();
+        return new YouTubeVideo(id, channelId, title, description, thumbnailUrl, tags, categoryId, publishedAt);
     }
 
     /**
@@ -349,7 +406,7 @@ public class YouTubeApiWrapper {
                 // At least we can send requests for multiple videos at once, don't know how many work so let's keep it
                 // down to 10 for now
                 if (videoIds.size() >= 10) {
-                    videoList.addAll(parseVideoArray(getVideoDetails((String[]) videoIds.toArray(),
+                    videoList.addAll(parseVideoArray(getVideoDetails(videoIds.toArray(new String[videoIds.size()]),
                             ytConnection.getRequestFactory().getInitializer())));
                     videoIds.clear();
                 }
@@ -379,7 +436,7 @@ public class YouTubeApiWrapper {
             try {
                 videoIds.add(it.next().getAsJsonObject().get("contentDetails").getAsJsonObject().get("videoId").getAsString());
                 if (videoIds.size() >= 10) {
-                    videoList.addAll(parseVideoArray(getVideoDetails((String[]) videoIds.toArray(),
+                    videoList.addAll(parseVideoArray(getVideoDetails(videoIds.toArray(new String[videoArray.size()]),
                             ytConnection.getRequestFactory().getInitializer())));
                     videoIds.clear();
                 }

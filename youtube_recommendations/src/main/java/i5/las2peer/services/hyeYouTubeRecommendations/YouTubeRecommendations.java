@@ -5,6 +5,7 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.Iterator;
 
 import javax.ws.rs.*;
 import javax.ws.rs.core.MediaType;
@@ -21,6 +22,7 @@ import i5.las2peer.api.security.UserAgent;
 import i5.las2peer.restMapper.RESTService;
 import i5.las2peer.restMapper.annotations.ServicePath;
 
+import i5.las2peer.services.hyeYouTubeRecommendations.util.DataBaseConnection;
 import i5.las2peer.services.hyeYouTubeRecommendations.util.TokenWrapper;
 import i5.las2peer.services.hyeYouTubeRecommendations.youTubeData.YouTubeApiWrapper;
 import i5.las2peer.services.hyeYouTubeRecommendations.youTubeData.YouTubeVideo;
@@ -68,6 +70,10 @@ public class YouTubeRecommendations extends RESTService {
 	private String clientId;
 	private String clientSecret;
 	private String apiKey;
+	private String mysqlHost;
+	private String mysqlDatabase;
+	private String mysqlUser;
+	private String mysqlPassword;
 	private final String ROOT_URI = "http://localhost:8080/hye-recommendations";
 	private final String LOGIN_URI = ROOT_URI + "/login";
 	private final String AUTH_URI = ROOT_URI + "/auth";
@@ -77,6 +83,7 @@ public class YouTubeRecommendations extends RESTService {
 	private GsonFactory json;
 	// Store access token in frontend instead
 	private static HashMap<String, YouTubeApiWrapper> ytConnections;
+	private static DataBaseConnection db;
 
 	/**
 	 * Class constructor, initializes member variables
@@ -84,13 +91,19 @@ public class YouTubeRecommendations extends RESTService {
 	HttpRequestInitializer httpRequestInitializer;
 	public YouTubeRecommendations() {
 		setFieldValues();
-		log.info("Using API key " + apiKey +" with client id " + clientId + " and secret " + clientSecret);
+		log.info("Using API key " + apiKey +" with client id " + clientId + " and secret " + clientSecret +
+		" and connecting to jdbc:mysql://" + mysqlHost + '/' + mysqlDatabase + " as " + mysqlUser);
 		transport = new ApacheHttpTransport();
 		json = new GsonFactory();
 		flow = new GoogleAuthorizationCodeFlow.Builder(transport, json, this.clientId, this.clientSecret,
 				Arrays.asList("https://www.googleapis.com/auth/youtube")).setAccessType("offline").build();
-		ytConnections = new HashMap<String, YouTubeApiWrapper>();
+		if (ytConnections == null)
+			ytConnections = new HashMap<String, YouTubeApiWrapper>();
 		YouTubeApiWrapper.setApiKey(apiKey);
+		if (db == null) {
+			db = new DataBaseConnection(mysqlHost, mysqlDatabase, mysqlUser, mysqlPassword);
+			db.init();
+		}
 	}
 
 	/**
@@ -170,10 +183,25 @@ public class YouTubeRecommendations extends RESTService {
 	 * @param ytConnection The YouTube connection stored for the user in question
 	 * @return Amount of video data objects updated
 	 */
-	private int synchronizeYouTubeData(YouTubeApiWrapper ytConnection) {
+	private int synchronizeYouTubeData(String userId, YouTubeApiWrapper ytConnection) {
+		if (!db.isHealthy()) {
+			log.severe("Database connection not healthy! Aborting YouTube synchronization.");
+			return -1;
+		}
+
 		HashMap<String, ArrayList<YouTubeVideo>> videoData = ytConnection.getYouTubeWatchData();
 		//JsonArray comments = YouTubeApiWrapper.getComments("videoId", flow.getRequestInitializer(), apiKey);
-		// TODO synchronize data base
+		// TODO synchronize comments
+		Iterator<String> ratingsIt = videoData.keySet().iterator();
+		while (ratingsIt.hasNext()) {
+			String rating = ratingsIt.next();
+			Iterator<YouTubeVideo> videoIt = videoData.get(rating).iterator();
+			while (videoIt.hasNext()) {
+				YouTubeVideo ytVideo = videoIt.next();
+				db.addVideo(ytVideo);
+				db.addRating(ytVideo.getVideoId(), userId, rating);
+			}
+		}
 		return videoData.size();
 	}
 
@@ -233,21 +261,21 @@ public class YouTubeRecommendations extends RESTService {
 	public Response updateYouTubeData() {
 		// TODO add constraint so that this function can only be called once per week/twice per month/etc. for same user (due to quota restraints)
 		// Check for access token of current user in memory
-		UserAgent user;
+		String userId;
 		try {
-			user = (UserAgent) Context.getCurrent().getMainAgent();
+			userId = getUserId((UserAgent) Context.getCurrent().getMainAgent());
 		} catch (Exception e) {
 			log.printStackTrace(e);
 			return Response.status(401).entity("Unable to get user agent. Are you logged in?").build();
 		}
 
-		YouTubeApiWrapper ytConnection = getConnection(user);
+		YouTubeApiWrapper ytConnection = getConnection(userId);
 		if (ytConnection == null || !ytConnection.intactConnection()) {
 			return Response.status(403).entity("No valid login data stored for user! Please login to YouTube and come" +
 					" back afterwards.").build();
 		}
 		try {
-			synchronizeYouTubeData(ytConnection);
+			synchronizeYouTubeData(userId, ytConnection);
 			return Response.ok().entity("YouTube Data successfully synchronized.").build();
 		} catch (Exception e) {
 			log.printStackTrace(e);
