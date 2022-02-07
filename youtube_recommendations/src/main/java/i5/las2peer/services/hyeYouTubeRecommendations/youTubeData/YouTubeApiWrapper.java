@@ -15,8 +15,10 @@ import com.google.gson.JsonObject;
 import i5.las2peer.logging.L2pLogger;
 import i5.las2peer.services.hyeYouTubeRecommendations.YouTubeRecommendations;
 
+import java.io.FileWriter;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 
 /**
@@ -32,11 +34,25 @@ public class YouTubeApiWrapper {
     private YouTube ytConnection;
     private Credential credential;
     private static final L2pLogger log = L2pLogger.getInstance(YouTubeRecommendations.class.getName());
+    private static FileWriter backup;
     private static String apiKey;
+
+    // Temporary debug function
+    public static void init() {
+        try {
+            backup = new FileWriter("ytDataBackup.json");
+        } catch (Exception e) {
+            log.severe("##############################################################");
+            log.severe("###### NO YOUTUBE BACKUP! STOP THE SERVICE IMMEDIATELY! ######");
+            log.severe("##############################################################");
+        }
+    }
 
     /**
      * Retrieves the details of the given YouTube video
      * Does not use user specific credentials, but a static API key instead
+     * KNOWN ISSUE: The fact that this function is static and uses the API key causes problems for unlisted videos
+     * which may only be accessible to certain users.
      *
      * @param videoIds The IDs of the YouTube videos which we are interested in
      * @return Json Array of video information of the YouTube videos identified by the specified IDs
@@ -45,14 +61,17 @@ public class YouTubeApiWrapper {
         if (apiKey == null || videoIds == null || videoIds.length == 0)
             return null;
         String videoIdString = videoIds[0];
-        for (int i = 1; i < videoIds.length; i++) { videoIdString += "," + videoIds[i] ; }
+        for (int i = 1; i < videoIds.length; ++i) { videoIdString += "," + videoIds[i] ; }
         try {
             YouTube ytConnection = new YouTube.Builder(new ApacheHttpTransport(), new GsonFactory(), initializer)
                     .setApplicationName("How's your Experience").build();
-            HttpRequest request = ytConnection.comments().list("snippet").setId(videoIdString)
+            HttpRequest request = ytConnection.videos().list("snippet").setId(videoIdString)
                     .setFields("items(snippet(title,description,tags,channelId,categoryId,publishedAt,thumbnails))")
                     .setMaxResults(Integer.toUnsignedLong(500)).setKey(apiKey).buildHttpRequest();
+            log.info("Sending request: " + request.getUrl().toString());
             JsonObject response = new Gson().fromJson(request.execute().parseAsString(), JsonObject.class);
+            backup.write(response.get("items").getAsJsonArray().toString());
+            backup.flush();
             return response.get("items").getAsJsonArray();
         } catch (Exception e) {
             log.printStackTrace(e);
@@ -76,8 +95,11 @@ public class YouTubeApiWrapper {
                     .setApplicationName("How's your Experience").build();
             HttpRequest request = ytConnection.commentThreads().list("snippet").set("videoId", videoId)
                     .setMaxResults(Integer.toUnsignedLong(500)).setKey(apiKey).buildHttpRequest();
+            log.info("Sending request: " + request.getUrl().toString());
             JsonObject response = new Gson().fromJson(request.execute().parseAsString(), JsonObject.class);
             comments = response.get("items").getAsJsonArray();
+            backup.write(comments.toString());
+            backup.flush();
             // Retrieving all comments might deplete quota too quickly
 //			while (response.has("nextPageToken")) {
 //				request = ytConnection.comments().list("snippet").set("videoId", videoId)
@@ -195,9 +217,12 @@ public class YouTubeApiWrapper {
                 request = ytConnection.videos().list("snippet").setMyRating(rating)
                         .setMaxResults(Integer.toUnsignedLong(500))
                         .setPageToken(response.get("nextPageToken").getAsString()).buildHttpRequest();
+                log.info("Sending request: " + request.getUrl().toString());
                 response = new Gson().fromJson(request.execute().parseAsString(), JsonObject.class);
                 videos.addAll(response.get("items").getAsJsonArray());
             }
+            backup.write(videos.toString());
+            backup.flush();
             return videos;
         } catch (Exception e) {
             // TODO improve error handling and only set ytConnection as invalid, if exception is actually related to it
@@ -233,6 +258,7 @@ public class YouTubeApiWrapper {
             // Get Subscribed channels
             HttpRequest request = ytConnection.subscriptions().list("snippet").setMine(true)
                     .setMaxResults(Integer.toUnsignedLong(500)).buildHttpRequest();
+            log.info("Sending request: " + request.getUrl().toString());
             JsonObject response = new Gson().fromJson(request.execute().parseAsString(), JsonObject.class);
             JsonArray subscriptions = response.get("items").getAsJsonArray();
             while (response.has("nextPageToken")) {
@@ -247,11 +273,15 @@ public class YouTubeApiWrapper {
             JsonArray videos = new JsonArray();
             Iterator<JsonElement> it = subscriptions.iterator();
             while (it.hasNext()) {
-                request = ytConnection.videos().list("id")
-                        .set("channelId", it.next().getAsJsonObject().get("snippet").getAsJsonObject().get("channelId").getAsString())
+                request = ytConnection.search().list("id")
+                        .set("channelId",it.next().getAsJsonObject().get("snippet").getAsJsonObject().get("resourceId")
+                                .getAsJsonObject().get("channelId").getAsString())
                         .setMaxResults(Integer.toUnsignedLong(500)).buildHttpRequest();
+                log.info("Sending request: " + request.getUrl().toString());
                 response = new Gson().fromJson(request.execute().parseAsString(), JsonObject.class);
                 videos.addAll(response.get("items").getAsJsonArray());
+                backup.write(response.get("items").getAsJsonArray().toString());
+                backup.flush();
                 // Getting all videos might deplete quota too quickly
 //				while (response.has("nextPageToken")) {
 //				request = ytConnection.videos().list("snippet,id")
@@ -261,7 +291,7 @@ public class YouTubeApiWrapper {
 //					videos.addAll(response.get("items").getAsJsonArray());
 //				}
             }
-            return subscriptions;
+            return videos;
         } catch (Exception e) {
             // TODO improve error handling and only set ytConnection as invalid, if exception is actually related to it
             ytConnection = null;
@@ -282,12 +312,14 @@ public class YouTubeApiWrapper {
             // Get Playlists
             HttpRequest request = ytConnection.playlists().list("snippet").setMine(true)
                     .setMaxResults(Integer.toUnsignedLong(500)).buildHttpRequest();
+            log.info("Sending request: " + request.getUrl().toString());
             JsonObject response = new Gson().fromJson(request.execute().parseAsString(), JsonObject.class);
             JsonArray playlists = response.get("items").getAsJsonArray();
             while (response.has("nextPageToken")) {
                 request = ytConnection.subscriptions().list("snippet").setMine(true)
                         .setMaxResults(Integer.toUnsignedLong(500))
                         .setPageToken(response.get("nextPageToken").getAsString()).buildHttpRequest();
+                log.info("Sending request: " + request.getUrl().toString());
                 response = new Gson().fromJson(request.execute().parseAsString(), JsonObject.class);
                 playlists.addAll(response.get("items").getAsJsonArray());
             }
@@ -301,6 +333,8 @@ public class YouTubeApiWrapper {
                         .setMaxResults(Integer.toUnsignedLong(500)).buildHttpRequest();
                 response = new Gson().fromJson(request.execute().parseAsString(), JsonObject.class);
                 videos.addAll(response.get("items").getAsJsonArray());
+                backup.write(response.get("items").getAsJsonArray().toString());
+                backup.flush();
                 // Getting all videos might deplete quota too quickly
 //				while (response.has("nextPageToken")) {
 //					request = ytConnection.subscriptions().list("snippet").setMine(true)
@@ -325,7 +359,7 @@ public class YouTubeApiWrapper {
      * @param videoObj The video data as Json
      * @return YouTubeVideo object with all relevant video data that was available
      */
-    private YouTubeVideo parseYtVideo(JsonObject videoObj) {
+    public static YouTubeVideo parseYtVideo(JsonObject videoObj) {
         String id = null;
         String channelId = null;
         String title = null;
@@ -356,11 +390,22 @@ public class YouTubeApiWrapper {
                         .getAsString();
         if (snippet.has("tags"))
             tags = snippet.get("tags").getAsJsonArray().toString().replaceAll("\\s", "")
-                    .split(",");
+                    .replaceAll("\"", "").replaceAll("\\[", "")
+                    .replaceAll("]", "").split(",");
         if (snippet.has("categoryId"))
             categoryId = snippet.get("categoryId").getAsInt();
         if (snippet.has("publishedAt"))
             publishedAt = snippet.get("publishedAt").getAsString();
+
+        // Second chance at getting videoId
+        if (id == null && thumbnailUrl != null) {
+            try {
+                id = thumbnailUrl.split("/")[4];
+            } catch (Exception e) {
+                log.warning("No ID for video YouTubeVideo (" + id + ", " + channelId + ", " + title + ", " +
+                        description + ", " + thumbnailUrl + ", " + tags + ", " + categoryId + ", " + publishedAt);
+            }
+        }
         return new YouTubeVideo(id, channelId, title, description, thumbnailUrl, tags, categoryId, publishedAt);
     }
 
@@ -398,17 +443,22 @@ public class YouTubeApiWrapper {
         }
         ArrayList<YouTubeVideo> videoList = new ArrayList<YouTubeVideo>();
         Iterator<JsonElement> it = videoArray.iterator();
-        ArrayList<String> videoIds = new ArrayList<String>();
+        HashSet<String> videoIds = new HashSet<String>();
         while (it.hasNext()) {
             try {
                 // This kind of sucks and is super inefficient, but we need the additional video information
+                JsonObject searchResult = it.next().getAsJsonObject();
+                if (!searchResult.has("id") || !searchResult.get("id").getAsJsonObject().has("videoId"))
+                    continue;
                 videoIds.add(it.next().getAsJsonObject().get("id").getAsJsonObject().get("videoId").getAsString());
                 // At least we can send requests for multiple videos at once, don't know how many work so let's keep it
                 // down to 10 for now
-                if (videoIds.size() >= 10) {
-                    videoList.addAll(parseVideoArray(getVideoDetails(videoIds.toArray(new String[videoIds.size()]),
-                            ytConnection.getRequestFactory().getInitializer())));
+                if (videoIds.size() >= 10 || !it.hasNext()) {
+                    String[] videoIdArray = videoIds.toArray(new String[videoIds.size()]);
                     videoIds.clear();
+                    // TODO if this request fails, it fails for up to 10 videos... that's kind of a waste of precious video data
+                    videoList.addAll(parseVideoArray(getVideoDetails(videoIdArray,
+                            ytConnection.getRequestFactory().getInitializer())));
                 }
             } catch (Exception e) {
                 log.printStackTrace(e);
@@ -435,7 +485,7 @@ public class YouTubeApiWrapper {
         while (it.hasNext()) {
             try {
                 videoIds.add(it.next().getAsJsonObject().get("contentDetails").getAsJsonObject().get("videoId").getAsString());
-                if (videoIds.size() >= 10) {
+                if (videoIds.size() >= 10 || !it.hasNext()) {
                     videoList.addAll(parseVideoArray(getVideoDetails(videoIds.toArray(new String[videoArray.size()]),
                             ytConnection.getRequestFactory().getInitializer())));
                     videoIds.clear();
@@ -456,10 +506,11 @@ public class YouTubeApiWrapper {
     public HashMap<String, ArrayList<YouTubeVideo>> getYouTubeWatchData() {
         HashMap<String, ArrayList<YouTubeVideo>> videoData = new HashMap<String, ArrayList<YouTubeVideo>>();
 
-        videoData.put("likes", parseVideoArray(getLikedVideos()));
-        videoData.put("dislikes", parseVideoArray(getDisikedVideos()));
-        videoData.put("subscriptions", parseSubscriptionsArray(getSubscriptions()));
+         videoData.put("likes", parseVideoArray(getLikedVideos()));
+         videoData.put("dislikes", parseVideoArray(getDisikedVideos()));
+         videoData.put("subscriptions", parseSubscriptionsArray(getSubscriptions()));
         // TODO research YouTube playlists, because if they're just used for music, it doesn't make that much sense to include them here
+        // TODO also we currently, don't consider uploads which is probably not a huge deal, but maybe still relevant
         videoData.put("playlists", parsePlaylistsArray(getPlaylists()));
         return videoData;
     }

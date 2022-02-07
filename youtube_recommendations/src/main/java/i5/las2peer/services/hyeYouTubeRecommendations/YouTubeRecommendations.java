@@ -1,11 +1,9 @@
 package i5.las2peer.services.hyeYouTubeRecommendations;
 
+import java.io.FileReader;
 import java.net.HttpURLConnection;
 import java.net.URI;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Iterator;
+import java.util.*;
 
 import javax.ws.rs.*;
 import javax.ws.rs.core.MediaType;
@@ -13,7 +11,10 @@ import javax.ws.rs.core.Response;
 
 import com.google.api.client.googleapis.auth.oauth2.GoogleAuthorizationCodeFlow;
 import com.google.api.client.http.*;
+import com.google.api.client.json.Json;
+import com.google.gson.Gson;
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import i5.las2peer.api.Context;
 import i5.las2peer.logging.L2pLogger;
@@ -25,6 +26,7 @@ import i5.las2peer.restMapper.annotations.ServicePath;
 import i5.las2peer.services.hyeYouTubeRecommendations.util.DataBaseConnection;
 import i5.las2peer.services.hyeYouTubeRecommendations.util.TokenWrapper;
 import i5.las2peer.services.hyeYouTubeRecommendations.youTubeData.YouTubeApiWrapper;
+import i5.las2peer.services.hyeYouTubeRecommendations.youTubeData.YouTubeComment;
 import i5.las2peer.services.hyeYouTubeRecommendations.youTubeData.YouTubeVideo;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
@@ -38,6 +40,7 @@ import io.swagger.annotations.SwaggerDefinition;
 import com.google.api.client.auth.oauth2.*;
 import com.google.api.client.http.apache.v2.ApacheHttpTransport;
 import com.google.api.client.json.gson.GsonFactory;
+import rice.p2p.util.tuples.Tuple;
 
 /**
  * HyE - YouTube Recommendations
@@ -95,14 +98,17 @@ public class YouTubeRecommendations extends RESTService {
 		" and connecting to jdbc:mysql://" + mysqlHost + '/' + mysqlDatabase + " as " + mysqlUser);
 		transport = new ApacheHttpTransport();
 		json = new GsonFactory();
-		flow = new GoogleAuthorizationCodeFlow.Builder(transport, json, this.clientId, this.clientSecret,
+		flow = new GoogleAuthorizationCodeFlow.Builder(transport, json, clientId, clientSecret,
 				Arrays.asList("https://www.googleapis.com/auth/youtube")).setAccessType("offline").build();
 		if (ytConnections == null)
 			ytConnections = new HashMap<String, YouTubeApiWrapper>();
 		YouTubeApiWrapper.setApiKey(apiKey);
 		if (db == null) {
 			db = new DataBaseConnection(mysqlHost, mysqlDatabase, mysqlUser, mysqlPassword);
-			db.init();
+			if (db.isHealthy())
+				db.init();
+			else
+				log.severe("!!! No database connection. The functionality of the service is severely limited !!!");
 		}
 	}
 
@@ -189,20 +195,34 @@ public class YouTubeRecommendations extends RESTService {
 			return -1;
 		}
 
+		// TODO this seems terribly inefficient...
 		HashMap<String, ArrayList<YouTubeVideo>> videoData = ytConnection.getYouTubeWatchData();
-		//JsonArray comments = YouTubeApiWrapper.getComments("videoId", flow.getRequestInitializer(), apiKey);
-		// TODO synchronize comments
 		Iterator<String> ratingsIt = videoData.keySet().iterator();
+		int dbInsertions = 0;
 		while (ratingsIt.hasNext()) {
 			String rating = ratingsIt.next();
+			if (videoData.get(rating) == null)
+				continue;
 			Iterator<YouTubeVideo> videoIt = videoData.get(rating).iterator();
 			while (videoIt.hasNext()) {
 				YouTubeVideo ytVideo = videoIt.next();
-				db.addVideo(ytVideo);
+				// Assume that video insertion failing means the video had already been added before
+				// Which also means, once recorded, comments don't get updated
+				if (db.addVideo(ytVideo)) {
+					dbInsertions++;
+					ArrayList<YouTubeComment> comments =
+							YouTubeApiWrapper.getComments(ytVideo.getVideoId(), flow.getRequestInitializer());
+					Iterator<YouTubeComment> commentIt = comments.iterator();
+					while (commentIt.hasNext())
+                                        {
+						db.addComment(commentIt.next());
+						dbInsertions++;
+					}
+				}
 				db.addRating(ytVideo.getVideoId(), userId, rating);
 			}
 		}
-		return videoData.size();
+		return dbInsertions;
 	}
 
 	// TODO implement ratings (videos of subscribed channel 1, videos in playlist 2, liked video 3, disliked video -1), "finMatch" method using inverted matrix factorization and semantic similarity based on word embeddings, MySQL data base connection
@@ -214,7 +234,7 @@ public class YouTubeRecommendations extends RESTService {
 	 */
 	@GET
 	@Path("/")
-	@Produces(MediaType.APPLICATION_JSON)
+	@Produces(MediaType.TEXT_PLAIN)
 	@ApiOperation(
 			value = "YouTube",
 			notes = "Returns YouTube watch data")
@@ -236,7 +256,7 @@ public class YouTubeRecommendations extends RESTService {
 		try {
 			// TODO implement data storage
 			log.info("Nothing to do...");
-			return Response.ok().entity(response).build();
+			return Response.ok().entity(response.toString()).build();
 		} catch (Exception e) {
 			log.printStackTrace(e);
 			return Response.status(500).entity("Unspecified server error").build();
@@ -270,6 +290,8 @@ public class YouTubeRecommendations extends RESTService {
 		}
 
 		YouTubeApiWrapper ytConnection = getConnection(userId);
+		// TODO just here for debugging
+		YouTubeApiWrapper.init();
 		if (ytConnection == null || !ytConnection.intactConnection()) {
 			return Response.status(403).entity("No valid login data stored for user! Please login to YouTube and come" +
 					" back afterwards.").build();
@@ -298,9 +320,9 @@ public class YouTubeRecommendations extends RESTService {
 			value = { @ApiResponse(
 					code = HttpURLConnection.HTTP_OK,
 					message = "OK") })
-	public Response login(@DefaultValue(ROOT_URI) @QueryParam("redirect_uri") String redirectUri) {
-		String redirectUrl = flow.newAuthorizationUrl().setRedirectUri(redirectUri).build();
-		return Response.temporaryRedirect(URI.create(AUTH_URI)).build();
+	public Response login() {
+		return Response.temporaryRedirect(URI.create(flow.newAuthorizationUrl().setRedirectUri(AUTH_URI).build()))
+				.build();
 	}
 
 	/**
@@ -320,8 +342,7 @@ public class YouTubeRecommendations extends RESTService {
 			value = { @ApiResponse(
 					code = HttpURLConnection.HTTP_OK,
 					message = "OK") })
-	public Response auth(@QueryParam("code") String code,
-						 @DefaultValue(ROOT_URI) @QueryParam("redirect_uri") String redirectUri) {
+	public Response auth(@QueryParam("code") String code) {
 		// Test authorization code
 		TokenResponse token = getAccessToken(code);
 		if (token == null) {
@@ -340,6 +361,6 @@ public class YouTubeRecommendations extends RESTService {
 			return Response.serverError().entity("Error storing access token.").build();
 		}
 
-		return Response.temporaryRedirect(URI.create(redirectUri)).build();
+		return Response.ok().entity("Login successful.").build();
 	}
 }

@@ -1,14 +1,19 @@
 package i5.las2peer.services.hyeYouTubeRecommendations.util;
 
+import com.google.gson.Gson;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.stream.JsonReader;
 import i5.las2peer.logging.L2pLogger;
 import i5.las2peer.services.hyeYouTubeRecommendations.YouTubeRecommendations;
 import i5.las2peer.services.hyeYouTubeRecommendations.youTubeData.YouTubeComment;
 import i5.las2peer.services.hyeYouTubeRecommendations.youTubeData.YouTubeVideo;
-import org.checkerframework.checker.units.qual.A;
 import rice.p2p.util.tuples.Tuple;
 
+import java.io.FileReader;
 import java.sql.*;
 import java.util.ArrayList;
+import java.util.Iterator;
 
 /**
  * DataBaseConnection
@@ -34,8 +39,8 @@ public class DataBaseConnection {
     public DataBaseConnection(String host, String database, String username, String password) {
         // TODO add variable for DB port, I suppose
         try {
-            Connection connection = DriverManager.getConnection("jdbc:mysql://" + host + '/' + database, username,
-                    password);
+            connection = DriverManager.getConnection("jdbc:mysql://" + host + '/' + database +
+                    "?useSSL=false", username, password);
             healthy = true;
             log.info("Successfully connected to MySQL database");
         } catch (Exception e) {
@@ -61,7 +66,7 @@ public class DataBaseConnection {
      */
     private boolean executeStatement(PreparedStatement statement) {
         try {
-            statement.executeQuery();
+            statement.execute();
             return true;
         } catch (Exception e) {
             log.printStackTrace(e);
@@ -77,7 +82,7 @@ public class DataBaseConnection {
      */
     private boolean executeStatement(String statement) {
         try {
-            connection.nativeSQL(statement);
+            connection.prepareCall(statement).execute();
             return true;
         } catch (Exception e) {
             log.printStackTrace(e);
@@ -95,35 +100,37 @@ public class DataBaseConnection {
             return false;
 
         // Try to create tables
-        healthy = executeStatement("create table ytVideos (" +
+        if (!executeStatement("create table ytVideos (" +
                 "id varchar(20) not null primary key," +
                 "channelId varchar(40)," +
                 "title varchar(100)," +
                 "description text," +
                 "thumbnailUrl varchar(128)," +
                 "categoryId int," +
-                "uploadDate char(20))") &&
-                executeStatement("create table ytComments (" +
-                        "id varchar(40) not null primary key," +
-                        "videoId varchar(20) references ytVideos(id)" +
-                        "content text," +
-                        "channelId varchar(40)," +
-                        "publishDate char(20)," +
-                        "likeCount int)") &&
-                executeStatement("create table ytRatings (" +
-                        "videoId varchar(20) not null references ytVideos(id)," +
-                        "userId char(128) not null," +
-                        "rating varchar(20) not null") &&
-                executeStatement("create table ytTags (tag varchar (64) not null primary key)") &&
-                executeStatement("create table tagRelations (" +
-                        "id int not null primary key auto_increment," +
-                        "videoId varchar(20) not null references ytVideos(id)," +
-                        "tag varchar(64) not null references ytTags(tag));");
-        if (!healthy) {
-            // If this fails, assume it's because they are already there and healthy (yes, this is a bad idea TODO fix it)
-            log.warning("There was an error creating MySQL tables, I guess that means they already exist and are" +
-                    " ready to use... If this is incorrect, please stop me now!");
-        }
+                "uploadDate char(20))"))
+            log.warning("Failed to create table ytVideos");
+        if (!executeStatement("create table ytComments (" +
+                "id varchar(40) not null primary key," +
+                "videoId varchar(20) references ytVideos(id)," +
+                "content text," +
+                "channelId varchar(40)," +
+                "publishDate char(20)," +
+                "likeCount int)"))
+            log.warning("Failed to create table ytComments");
+        if (!executeStatement("create table ytRatings (" +
+                "videoId varchar(20) not null references ytVideos(id)," +
+                "userId char(128) not null," +
+                "rating varchar(20) not null)"))
+            log.warning("Failed to create table ytRatings");
+        if (!executeStatement("create table ytTags (tag varchar (64) not null primary key)"))
+            log.warning("Failed to create table ytTags");
+        if (!executeStatement("create table tagRelations (" +
+                "id int not null primary key auto_increment," +
+                "videoId varchar(20) not null references ytVideos(id)," +
+                "tag varchar(64) not null references ytTags(tag))"))
+            log.warning("Failed to create table tagRelations");
+        // If this fails, assume it's because they are already there and healthy (yes, this is a bad idea TODO fix it)
+
         return true;
     }
 
@@ -147,7 +154,7 @@ public class DataBaseConnection {
             statement.setString(5, video.getThumbnailUrl());
             statement.setInt(6, video.getCategoryId());
             statement.setString(7, video.getUploadDate());
-            statement.executeQuery();
+            statement.execute();
         } catch (Exception e) {
             log.printStackTrace(e);
             return false;
@@ -160,12 +167,12 @@ public class DataBaseConnection {
             try {
                 PreparedStatement statement = connection.prepareStatement("insert ignore into ytTags values (?)");
                 statement.setString(1, tags[i]);
-                statement.executeQuery();
+                statement.execute();
 
                 statement = connection.prepareStatement("insert into tagRelations (videoId, tag) values (?, ?)");
                 statement.setString(1, video.getVideoId());
-                statement.setString(1, tags[i]);
-                statement.executeQuery();
+                statement.setString(2, tags[i]);
+                statement.execute();
             } catch (Exception e) {
                 log.printStackTrace(e);
             }
@@ -189,12 +196,12 @@ public class DataBaseConnection {
             statement.setString(1, videoId);
             statement.setString(2, userId);
             statement.setString(3, rating);
-            statement.executeQuery();
+            statement.execute();
+            return true;
         } catch (Exception e) {
             log.printStackTrace(e);
             return false;
         }
-        return true;
     }
 
     /**
@@ -215,12 +222,12 @@ public class DataBaseConnection {
             statement.setString(4, comment.getAuthorId());
             statement.setString(5, comment.getPublishDate());
             statement.setInt(6, comment.getLikeCount());
-            statement.executeQuery();
+            statement.execute();
+            return true;
         } catch (Exception e) {
             log.printStackTrace(e);
             return false;
         }
-        return true;
     }
 
     /**

@@ -25,6 +25,9 @@ dependencies {
     // compileOnly will be moved into the lib dir afterwards
     implementation "i5:las2peer-bundle:${project.property('core.version')}"
 
+    // MySQL
+    implementation 'mysql:mysql-connector-java:8.0.11'
+
     // Google API
     implementation 'com.google.api-client:google-api-client:1.32.2'
     implementation 'com.google.auth:google-auth-library-oauth2-http:1.3.0'
