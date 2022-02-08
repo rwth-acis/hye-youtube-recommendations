@@ -508,7 +508,7 @@ public class YouTubeApiWrapper {
 
          videoData.put("likes", parseVideoArray(getLikedVideos()));
          videoData.put("dislikes", parseVideoArray(getDisikedVideos()));
-         videoData.put("subscriptions", parseSubscriptionsArray(getSubscriptions()));
+        // videoData.put("subscriptions", parseSubscriptionsArray(getSubscriptions()));
         // TODO research YouTube playlists, because if they're just used for music, it doesn't make that much sense to include them here
         // TODO also we currently, don't consider uploads which is probably not a huge deal, but maybe still relevant
         videoData.put("playlists", parsePlaylistsArray(getPlaylists()));

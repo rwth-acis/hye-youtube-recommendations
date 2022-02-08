@@ -23,6 +23,7 @@ import i5.las2peer.api.security.UserAgent;
 import i5.las2peer.restMapper.RESTService;
 import i5.las2peer.restMapper.annotations.ServicePath;
 
+import i5.las2peer.services.hyeYouTubeRecommendations.recommendations.MatrixFactorization;
 import i5.las2peer.services.hyeYouTubeRecommendations.util.DataBaseConnection;
 import i5.las2peer.services.hyeYouTubeRecommendations.util.TokenWrapper;
 import i5.las2peer.services.hyeYouTubeRecommendations.youTubeData.YouTubeApiWrapper;
@@ -87,6 +88,7 @@ public class YouTubeRecommendations extends RESTService {
 	// Store access token in frontend instead
 	private static HashMap<String, YouTubeApiWrapper> ytConnections;
 	private static DataBaseConnection db;
+	private static MatrixFactorization mf;
 
 	/**
 	 * Class constructor, initializes member variables
@@ -110,6 +112,8 @@ public class YouTubeRecommendations extends RESTService {
 			else
 				log.severe("!!! No database connection. The functionality of the service is severely limited !!!");
 		}
+		if (mf == null)
+			mf = new MatrixFactorization();
 	}
 
 	/**
@@ -212,6 +216,8 @@ public class YouTubeRecommendations extends RESTService {
 					dbInsertions++;
 					ArrayList<YouTubeComment> comments =
 							YouTubeApiWrapper.getComments(ytVideo.getVideoId(), flow.getRequestInitializer());
+					if (comments == null)
+					    continue;
 					Iterator<YouTubeComment> commentIt = comments.iterator();
 					while (commentIt.hasNext())
                                         {
@@ -223,6 +229,21 @@ public class YouTubeRecommendations extends RESTService {
 			}
 		}
 		return dbInsertions;
+	}
+
+	private Tuple<ArrayList<Tuple<String, String>>, ArrayList<Tuple<String, String>>> splitData(
+			ArrayList<Tuple<String, String>> data, int testDataPercentage) {
+		ArrayList<Tuple<String, String>> trainData = new ArrayList<Tuple<String, String>>();
+		ArrayList<Tuple<String, String>> testData = new ArrayList<Tuple<String, String>>();
+
+		for (Tuple<String, String> tuple : data) {
+			if (Math.random() < testDataPercentage)
+				testData.add(tuple);
+			else
+				trainData.add(tuple);
+		}
+
+		return new Tuple<ArrayList<Tuple<String, String>>, ArrayList<Tuple<String, String>>>(trainData, testData);
 	}
 
 	// TODO implement ratings (videos of subscribed channel 1, videos in playlist 2, liked video 3, disliked video -1), "finMatch" method using inverted matrix factorization and semantic similarity based on word embeddings, MySQL data base connection
@@ -362,5 +383,53 @@ public class YouTubeRecommendations extends RESTService {
 		}
 
 		return Response.ok().entity("Login successful.").build();
+	}
+
+	/**
+	 * Debug function used to create and evaluate the fitness of the Spark MlLib Matrix Factorization
+	 *
+	 * @return The MSE of the model created for the requesting user
+	 */
+	@GET
+	@Path("/model")
+	@Produces(MediaType.TEXT_PLAIN)
+	@ApiOperation(
+			value = "YouTube - Authentication",
+			notes = "Creates and evaluates the Matrix Factorization model created for the given user")
+	@ApiResponses(
+			value = { @ApiResponse(
+					code = HttpURLConnection.HTTP_OK,
+					message = "OK") })
+	public Response createAndEvaluateModel(@DefaultValue("20")
+											   @QueryParam("testDataPercentage") String testDataPercentage) {
+		int testSplit;
+		try {
+			testSplit = Integer.parseInt(testDataPercentage);
+		} catch (Exception e) {
+			return Response.status(400).entity("Invalid value for testDataSize: " + testDataPercentage).build();
+		}
+		String userId;
+		try {
+			userId = Context.getCurrent().getMainAgent().getIdentifier();
+			// TODO only for testing
+			userId = "MICHI";
+		} catch (Exception e) {
+			return Response.status(401).entity("Could not get user agent! Are you logged in?").build();
+		}
+
+		// Retrieve data stored for user
+		ArrayList<Tuple<String, String>> ratingData = db.getRatingsByUserId(userId);
+		if (ratingData == null || ratingData.isEmpty())
+			return Response.status(400).entity("There is currently no YouTube watch data stored for you.").build();
+
+		// Build and evaluate model
+		Tuple<ArrayList<Tuple<String, String>>, ArrayList<Tuple<String, String>>> trainAndTestData =
+				splitData(ratingData, testSplit);
+		ArrayList<String> userIds = new ArrayList<String>();
+		userIds.add(userId);
+		ArrayList<ArrayList<Tuple<String, String>>> userRatings = new ArrayList<ArrayList<Tuple<String, String>>>();
+		userRatings.add(trainAndTestData.a());
+		mf.train(userIds, userRatings);
+		return Response.ok().entity(mf.evaluateModel(userId, trainAndTestData.b())).build();
 	}
 }
