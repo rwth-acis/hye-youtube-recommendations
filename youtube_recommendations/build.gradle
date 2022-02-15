@@ -1,4 +1,4 @@
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            plugins {
+plugins {
     // Apply the application plugin to add support for building a CLI application in Java.
     id 'application'
     id 'eclipse'
@@ -28,15 +28,10 @@ dependencies {
     // MySQL
     implementation 'mysql:mysql-connector-java:8.0.11'
 
-    // Recommendations
-    implementation group: 'org.apache.spark', name: 'spark-core_2.13', version: '3.2.1'
-    implementation group: 'org.apache.spark', name: 'spark-mllib_2.13', version: '3.2.1'
-    implementation 'org.apache.commons:commons-lang3:3.12.0'
-
     // Google API
-    implementation 'com.google.api-client:google-api-client:1.32.2'
-    implementation 'com.google.auth:google-auth-library-oauth2-http:1.3.0'
-    implementation 'com.google.apis:google-api-services-youtube:v3-rev222-1.25.0'
+     implementation 'com.google.api-client:google-api-client:1.32.2'
+     implementation 'com.google.auth:google-auth-library-oauth2-http:1.3.0'
+     implementation 'com.google.apis:google-api-services-youtube:v3-rev222-1.25.0'
 }
 
 configurations {
@@ -55,7 +50,6 @@ jar {
         // Exclude signatures to be able to natively bundle signed jars
         exclude 'META-INF/*.RSA', 'META-INF/*.SF', 'META-INF/*.DSA'
     }
-    zip64 true
 }
 
 application {

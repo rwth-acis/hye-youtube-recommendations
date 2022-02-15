@@ -80,6 +80,6 @@ public class YouTubeComment {
                 "\"content\":\"" + content + "\"," +
                 "\"authorId\":\"" + channelId + "\"," +
                 "\"publishDate\":\"" + publishDate + "\"," +
-                "\"likeCount\":" + Integer.toString(likeCount);
+                "\"likeCount\":" + likeCount;
     }
 }
