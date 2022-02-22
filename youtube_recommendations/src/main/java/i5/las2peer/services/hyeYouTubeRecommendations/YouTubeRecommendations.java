@@ -64,7 +64,7 @@ import rice.p2p.util.tuples.Tuple;
 @SwaggerDefinition(
 		info = @Info(
 				title = "Custom YouTube Recommender System",
-				version = "0.1",
+				version = "0.2.0",
 				description = "Part of How's your Experience. Used to obtain data from YouTube and generate custom content recommendations.",
 				termsOfService = "http://your-terms-of-service-url.com",
 				contact = @Contact(
@@ -98,6 +98,8 @@ public class YouTubeRecommendations extends RESTService {
 	private final String W2V_MODEL_SUFFIX = "_W2V-Model";
 	private final String ALPHA_SUFFIX = "_Alpha";
 	private static final L2pLogger log = L2pLogger.getInstance(YouTubeRecommendations.class.getName());
+	private final long ONE_DAY_IN_MILLISECONDS = 1000 * 60 * 60 * 24;
+	private final long TWO_WEEKS_IN_MILLISECONDS = ONE_DAY_IN_MILLISECONDS * 14;
 
 	private final AuthorizationCodeFlow flow;
 	private final HttpTransport transport;
@@ -244,20 +246,28 @@ public class YouTubeRecommendations extends RESTService {
 			log.severe("Database connection not healthy! Aborting YouTube synchronization.");
 			return -1;
 		}
+		// Add database entry that user data is currently being updated
+		int updateId = db.addDbUpdate(userId);
 
 		// TODO this seems terribly inefficient... if you have any ideas, let me know
+		// TODO add check that update was correct, otherwise people would be pretty pissed about unsuccessful synchs
 		HashMap<String, ArrayList<YouTubeVideo>> videoData = ytConnection.getYouTubeWatchData();
 		int dbInsertions = 0;
 		for (String rating : videoData.keySet()) {
 			if (videoData.get(rating) == null)
 				continue;
 			ArrayList<YouTubeVideo> videoRatings = videoData.get(rating);
+			// System.out.println("");
+			// System.out.print(rating + ":");
 			Iterator<YouTubeVideo> videoIt = videoRatings.iterator();
 			// Not sure how many videos can be requested at once, so let's stick to 10 for now
 			String[] videoIdList = new String[10];
 			int itemCount = 0;
 			while (videoIt.hasNext()) {
 				YouTubeVideo ytVideo = videoIt.next();
+				// System.out.print(ytVideo.getVideoId() + " ");
+				db.addRating(ytVideo.getVideoId(), userId, rating);
+				dbInsertions++;
 				// Check whether video data is complete
 				if (!ytVideo.isComplete()) {
 					// First, check database
@@ -269,10 +279,25 @@ public class YouTubeRecommendations extends RESTService {
 						videoIdList[itemCount] = ytVideo.getVideoId();
 						itemCount++;
 						if (itemCount == 10 || !videoIt.hasNext()) {
-							// Just append results to current list
-							videoRatings.addAll(YouTubeApiWrapper.getVideoDetails(videoIdList,
-									flow.getRequestInitializer()));
+							// Add video data to database
+							for (YouTubeVideo newVideo : YouTubeApiWrapper.getVideoDetails(videoIdList,
+									flow.getRequestInitializer())) {
+											db.addVideo(newVideo);
+											dbInsertions++;
+											// Ignore comments for now (take up quota and aren't used)
+//											ArrayList<YouTubeComment> comments =
+//												YouTubeApiWrapper.
+//												getComments(newVideo.getVideoId(),
+//												flow.getRequestInitializer());
+//											if (comments == null)
+//					    							continue;
+//											for (YouTubeComment comment : comments) {
+//												db.addComment(comment);
+//												dbInsertions++;
+//											}
+							}
 							itemCount = 0;
+							videoIdList = new String[10];
 						}
 					}
 				}
@@ -280,25 +305,25 @@ public class YouTubeRecommendations extends RESTService {
 				// Which also means, once recorded, comments don't get updated
 				if (db.addVideo(ytVideo)) {
 					dbInsertions++;
-					ArrayList<YouTubeComment> comments =
-							YouTubeApiWrapper.getComments(ytVideo.getVideoId(), flow.getRequestInitializer());
-					if (comments == null)
-					    continue;
-					Iterator<YouTubeComment> commentIt = comments.iterator();
-					while (commentIt.hasNext()){
-						db.addComment(commentIt.next());
-						dbInsertions++;
-					}
+//					ArrayList<YouTubeComment> comments =
+//							YouTubeApiWrapper.getComments(ytVideo.getVideoId(), flow.getRequestInitializer());
+//					if (comments == null)
+//					    continue;
+//					for (YouTubeComment comment : comments) {
+//						db.addComment(comment);
+//						dbInsertions++;
+//					}
 				}
-				db.addRating(ytVideo.getVideoId(), userId, rating);
 			}
 		}
-		// Lastly store alpha value to signify that user synchronized DB
+		// Lastly store alpha value and update database to signify that user synchronized DB
 		try {
 			Context context = Context.getCurrent();
 			Envelope env = context.createEnvelope(getAlphaHandle(userId));
 			env.setContent(0.5);
 			context.storeEnvelope(env);
+			if (updateId != -1)
+				db.updateDbUpdate(updateId, "success");
 		} catch(Exception e) {
 			log.printStackTrace(e);
 		}
@@ -511,11 +536,27 @@ public class YouTubeRecommendations extends RESTService {
 	}
 
 	/**
+	 * Inserts the provided one time code into the database
+	 *
+	 * @param oneTimeCode Code used to link request to later user observation
+	 * @param alpha Alpha value stored for user at time of request
+	 * @param cf The best similarity computed based on collaborative filtering for all valid user pairs
+	 * @param w2v The best similarity computed based on word2vec for all valid user pairs
+	 * @return Whether database insertion was successful
+	 */
+	public boolean insertOneTimeCode(String oneTimeCode, Double alpha, Double cf, Double w2v) {
+		if (db.isHealthy())
+			return db.addOneTimeCode(oneTimeCode, alpha, cf, w2v);
+		return false;
+	}
+
+	/**
 	 * Finds the best match out of the given users for the requesting user based on the previously computed machine-
 	 * learning models
 	 *
 	 * @param userIds HashSet of las2peer User Agent IDs who should be considered as possbile matches
 	 * @param request The YouTube request for which the users are matched (e.g., specific video, or search query)
+	 *                (CURRENTLY: One time code used to match request to matching computation parameters and observations)
 	 * @return The las2peer Agent ID which optimizes both inverted collaborative filtering and semantic closeness
 	 */
 	public String findMatch(HashSet<String> userIds, String request) {
@@ -585,7 +626,7 @@ public class YouTubeRecommendations extends RESTService {
 				continue;
 			// Note, that cfVal and w2vVal are normalized, due to (likely) differences in dimensionality
 			Tuple<Double, Double> matchT = matchVals.get(matchId);
-			double matchVal = ((1-alpha) * (matchT.a()/maxCfVal)) - (alpha * (matchT.b()/maxW2vVal));
+			double matchVal = (alpha * (matchT.a()/maxCfVal)) - ((1 - alpha) * (matchT.b()/maxW2vVal));
 			// debug info
 			log.info("Computed match value " + String.valueOf(matchVal) + " for user pair " + userId + ", " + matchId);
 			if (matchVal > bestMatchVal) {
@@ -593,6 +634,8 @@ public class YouTubeRecommendations extends RESTService {
 				bestMatchId = matchId;
 			}
 		}
+		// Add request to database (not the original intended function of request String)
+		insertOneTimeCode(request, alpha, maxCfVal, maxW2vVal);
 		return bestMatchId;
 	}
 
@@ -645,7 +688,6 @@ public class YouTubeRecommendations extends RESTService {
 					code = HttpURLConnection.HTTP_OK,
 					message = "OK") })
 	public Response updateYouTubeData() {
-		// TODO add constraint so that this function can only be called once per week/twice per month/etc. for same user (due to quota restraints)
 		// Check for access token of current user in memory
 		String userId;
 		try {
@@ -654,6 +696,17 @@ public class YouTubeRecommendations extends RESTService {
 			log.printStackTrace(e);
 			return Response.status(401).entity("Unable to get user agent. Are you logged in?").build();
 		}
+
+		// Check whether user already updated their watch data in the last two weeks
+		if (!db.isHealthy())
+			return buildResponse(500, "No database connection!");
+		Long lastUpdate = db.getLastDbUpdate(userId);
+		if (lastUpdate == 0L)
+			return buildResponse(403, "Your data is currently being updated.");
+		if (lastUpdate > -1L && lastUpdate < TWO_WEEKS_IN_MILLISECONDS)
+			return buildResponse(403, "You recently updated your watch data. Please try again in " +
+					String.valueOf((int)((float)(TWO_WEEKS_IN_MILLISECONDS - lastUpdate) / ONE_DAY_IN_MILLISECONDS) + 1) +
+					"days.");
 
 		YouTubeApiWrapper ytConnection = getConnection(userId);
 		if (ytConnection == null || !ytConnection.intactConnection()) {
@@ -748,7 +801,7 @@ public class YouTubeRecommendations extends RESTService {
 	/**
 	 * Update alpha value used to balance recommendations between serendipity and topical similarity
 	 *
-	 * @alphaVal New value for alpha
+	 * @param alphaVal New value for alpha
 	 * @return Status code indicating whether update was successful
 	 */
 	@POST
@@ -989,9 +1042,14 @@ public class YouTubeRecommendations extends RESTService {
 					YouTubeVideo videoData = db.getVideoById(videoId);
 					if (videoData == null)
 						continue;
-					bagOfWords.addAll(parseVideoDetail(videoData.getTitle()));
-					bagOfWords.addAll(parseVideoDetail(videoData.getDescription()));
-					bagOfWords.addAll(parseTags(videoData.getTags()));
+					try {
+						bagOfWords.addAll(parseVideoDetail(videoData.getTitle()));
+						bagOfWords.addAll(parseVideoDetail(videoData.getDescription()));
+						bagOfWords.addAll(parseTags(videoData.getTags()));
+					} catch (Exception e) {
+						log.printStackTrace(e);
+						continue;
+					}
 					// Including comments seems to make result worse
 					// bagOfWords.addAll(parseComments(db.getCommentsByVideoId(videoId)));
 					log.info(bagOfWords.toString());
@@ -1090,35 +1148,72 @@ public class YouTubeRecommendations extends RESTService {
 		}
 	}
 
+//	/**
+//	 * TODO remove, just here for debugging
+//	 *
+//	 * @return nothin'
+//	 */
+//	@GET
+//	@Path("/match")
+//	@Produces(MediaType.TEXT_PLAIN)
+//	@ApiOperation(
+//			value = "YouTube",
+//			notes = "Calls find match function")
+//	@ApiResponses(
+//			value = { @ApiResponse(
+//					code = HttpURLConnection.HTTP_OK,
+//					message = "OK") })
+//	public Response findMatch() {
+//		try {
+//			String userId = getUserId((UserAgent) Context.getCurrent().getMainAgent());
+//		} catch (Exception e) {
+//			log.printStackTrace(e);
+//			return buildResponse(401, "Unable to get user agent. Are you logged in?");
+//		}
+//
+//		try {
+//			findMatch(db.getUserIds(), "");
+//			return Response.ok().build();
+//		} catch (Exception e) {
+//			log.printStackTrace(e);
+//			return Response.serverError().build();
+//		}
+//	}
+
 	/**
-	 * TODO remove, just here for debugging
+	 * Stores the sent user observation in MySQL database
 	 *
-	 * @return nothin'
+	 * @param observationObj The one time code used to identify the specific request,
+	 *                       number of shown videos and number of relevant videos as Json string
+	 * @return Whether Database insertion was successful
 	 */
-	@GET
-	@Path("/match")
+	@POST
+	@Path("/observation")
+	@Consumes(MediaType.APPLICATION_JSON)
 	@Produces(MediaType.TEXT_PLAIN)
 	@ApiOperation(
 			value = "YouTube",
-			notes = "Calls find match function")
+			notes = "Inserts given observation data to database")
 	@ApiResponses(
 			value = { @ApiResponse(
 					code = HttpURLConnection.HTTP_OK,
 					message = "OK") })
-	public Response findMatch() {
+	public Response addUserObservation(String observationObj) {
+		// Although we don't require any user information, this request is only available to authenticated users
 		try {
-			String userId = getUserId((UserAgent) Context.getCurrent().getMainAgent());
+			UserAgent user = (UserAgent) Context.getCurrent().getMainAgent();
 		} catch (Exception e) {
-			log.printStackTrace(e);
-			return buildResponse(401, "Unable to get user agent. Are you logged in?");
+			return buildResponse(401, "This resource is only available to authenticated users.");
 		}
-
 		try {
-			findMatch(db.getUserIds(), "");
-			return Response.ok().build();
+			JsonObject observation = new Gson().fromJson(observationObj, JsonObject.class);
+			if (db.updateObservationData(observation.get("oneTimeCode").getAsString(),
+					observation.get("noVideos").getAsInt(), observation.get("noHelpful").getAsInt()))
+				return buildResponse(200, "Thank you for sharing your observation");
+			return buildResponse(500, "Thank you for sharing your observation. Unfortunately, it could not" +
+					"be stored due to a database error.");
 		} catch (Exception e) {
-			log.printStackTrace(e);
-			return Response.serverError().build();
+			return buildResponse(400, "Something about your request data seems to be invalid.");
 		}
 	}
 }

@@ -13,6 +13,7 @@ import rice.p2p.util.tuples.Tuple;
 import java.io.FileReader;
 import java.sql.*;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -171,6 +172,20 @@ public class DataBaseConnection {
                 "videoId varchar(20) not null primary key references ytVideos(id)," +
                 "vector text not null)"))
             log.warning("Failed to create table videoVectors");
+        if (!executeStatement("create table userDbUpdates (" +
+                "id int not null primary key auto_increment," +
+                "userId char(128) not null," +
+                "status varchar(7) not null default 'ongoing'," +
+                "lastUpdate datetime not null default current_timestamp)"))
+            log.warning("Failed to create table userDbUpdates");
+        if (!executeStatement("create table oneTimeCodes (" +
+                "id char(20) not null primary key," +
+                "alpha double," +
+                "cf double," +
+                "w2v double," +
+                "noVideos int," +
+                "noHelpful int)"))
+            log.warning("Failed to create table oneTimeCodes");
         // If this fails, assume it's because they are already there and healthy (yes, this is a bad idea TODO fix it)
 
         return true;
@@ -197,6 +212,9 @@ public class DataBaseConnection {
             statement.setInt(6, video.getCategoryId());
             statement.setString(7, video.getUploadDate());
             statement.execute();
+        } catch (java.sql.SQLIntegrityConstraintViolationException e) {
+            log.info("Video " + video.getVideoId() + " already in database.");
+            return false;
         } catch (Exception e) {
             log.printStackTrace(e);
             return false;
@@ -287,6 +305,105 @@ public class DataBaseConnection {
                     "insert into videoVectors values (?, ?)");
             statement.setString(1, videoId);
             statement.setString(2, vectorToString(videoVector));
+            statement.execute();
+            return true;
+        } catch (Exception e) {
+            log.printStackTrace(e);
+            return false;
+        }
+    }
+
+    /**
+     * Add DB update to MySQL database
+     *
+     * @param userId las2peer agent user ID
+     * @return ID of update entry or -1 on failure
+     */
+    public int addDbUpdate(String userId) {
+        if (!healthy)
+            return -1;
+        try {
+            PreparedStatement statement = connection.prepareStatement("insert into userDbUpdates (userId) values (?)");
+            statement.setString(1, userId);
+            statement.execute();
+            // Get latest entry
+            statement = connection.prepareStatement("select max(id) as 'MaxId' from userDbUpdates");
+            ResultSet resultSet = statement.executeQuery();
+            resultSet.next();
+            return resultSet.getInt("MaxId");
+        } catch (Exception e) {
+            log.printStackTrace(e);
+            return -1;
+        }
+    }
+
+    /**
+     * Updates the status of the given DB user update in MySQL database
+     *
+     * @param id Index to update entry to update
+     * @param status New status of update entry
+     * @return Whether update was successful
+     */
+    public boolean updateDbUpdate(int id, String status) {
+        if (!healthy)
+            return false;
+        try {
+            PreparedStatement statement = connection.prepareStatement(
+                    "update userDbUpdates set status = ? where id = ?");
+            statement.setString(1, status);
+            statement.setInt(2, id);
+            statement.execute();
+            return true;
+        } catch (Exception e) {
+            log.printStackTrace(e);
+            return false;
+        }
+    }
+
+    /**
+     * Adds the data computed by the findMatch function to the MySQL database with a unique id
+     *
+     * @param id One time code used to link user feedback to parameters of findMatch function
+     * @param alpha Value for alpha (balance factor between serendipity and topical relatedness)
+     * @param cf Value computed for serendipity
+     * @param w2v Value computed for topical relatedness
+     * @return Whether db insertion was successful
+     */
+    public boolean addOneTimeCode(String id, double alpha, double cf, double w2v) {
+        if (!healthy)
+            return false;
+        try {
+            PreparedStatement statement = connection.prepareStatement(
+                    "insert into oneTimeCodes (id, alpha, cf, w2v) values (?,?,?,?)");
+            statement.setString(1, id);
+            statement.setDouble(2, alpha);
+            statement.setDouble(3, cf);
+            statement.setDouble(4, w2v);
+            statement.execute();
+            return true;
+        } catch (Exception e) {
+            log.printStackTrace(e);
+            return false;
+        }
+    }
+
+    /**
+     * Updates the user observation data for given one time code in oneTimeCodes table
+     *
+     * @param id One time code identifying request
+     * @param noVideos Number of videos presented to user
+     * @param noHelpful Number of helpful videos according to user
+     * @return Whether update was successful
+     */
+    public boolean updateObservationData(String id, int noVideos, int noHelpful) {
+        if (!healthy)
+            return false;
+        try {
+            PreparedStatement statement = connection.prepareStatement(
+                    "update oneTimeCodes set noVideos = ?, noHelpful = ? where id = ?");
+            statement.setInt(1, noVideos);
+            statement.setInt(2, noHelpful);
+            statement.setString(3, id);
             statement.execute();
             return true;
         } catch (Exception e) {
@@ -504,6 +621,41 @@ public class DataBaseConnection {
                 return new ArrayList<Double>();
             }
             return stringToVector(resultSet.getString("vector"));
+        } catch (Exception e) {
+            log.printStackTrace(e);
+            return null;
+        }
+    }
+
+    /**
+     * Retrieve last time given user updated their YouTube watch data
+     *
+     * @param userId las2peer user agent ID
+     * @return Time since user's last successful YouTube watch data update
+     */
+    public Long getLastDbUpdate(String userId) {
+        if (!healthy || userId == null)
+            return null;
+
+        try {
+            PreparedStatement statement = connection.prepareStatement(
+                    "select * from userDbUpdates where userId = ?");
+            statement.setString(1, userId);
+            ResultSet resultSet = statement.executeQuery();
+            Long timeSinceLastUpdate = -1L;
+            String status = "";
+            Long now = new Date().getTime();
+            while(resultSet.next()) {
+                status = resultSet.getString("status");
+                if (status.equals("fail"))
+                    continue;
+                Long timeSinceUpdate = now - resultSet.getDate("lastUpdate").getTime();
+                if (timeSinceLastUpdate == -1L || timeSinceUpdate < timeSinceLastUpdate)
+                    timeSinceLastUpdate = timeSinceUpdate;
+            }
+            if (status.equals("ongoing"))
+                return 0L;
+            return timeSinceLastUpdate;
         } catch (Exception e) {
             log.printStackTrace(e);
             return null;
