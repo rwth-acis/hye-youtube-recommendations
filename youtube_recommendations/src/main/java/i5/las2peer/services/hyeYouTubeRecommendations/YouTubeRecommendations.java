@@ -89,11 +89,11 @@ public class YouTubeRecommendations extends RESTService {
 	private String modelName;
 	private String serviceAgentName;
 	private String serviceAgentPw;
+	private String rootUri;
 
 	// TODO change user based word2vec storage to service based
-	private final String ROOT_URI = "http://localhost:8080/hye-recommendations";
-	private final String LOGIN_URI = ROOT_URI + "/login";
-	private final String AUTH_URI = ROOT_URI + "/auth";
+	private String LOGIN_URI;
+	private String AUTH_URI;
 	private final String MF_MODEL_SUFFIX = "_MF-Model";
 	private final String W2V_MODEL_SUFFIX = "_W2V-Model";
 	private final String ALPHA_SUFFIX = "_Alpha";
@@ -118,7 +118,10 @@ public class YouTubeRecommendations extends RESTService {
 		log.info("Using API key " + apiKey + " with client id " + clientId + " and secret " + clientSecret +
 				" and connecting to jdbc:mysql://" + mysqlHost + '/' + mysqlDatabase + " as " + mysqlUser +
 				" and obtaining model " + modelName + " from server running at " + mlLibUrl +
-				" using service agent " + serviceAgentName + " with password " + serviceAgentPw);
+				" using service agent " + serviceAgentName + " with password " + serviceAgentPw +
+				" and running at " + rootUri);
+		LOGIN_URI = rootUri + "login";
+		AUTH_URI = rootUri + "auth";
 		transport = new ApacheHttpTransport();
 		json = new GsonFactory();
 		flow = new GoogleAuthorizationCodeFlow.Builder(transport, json, clientId, clientSecret,
@@ -242,14 +245,13 @@ public class YouTubeRecommendations extends RESTService {
 	 * @return Amount of video data objects updated
 	 */
 	private int synchronizeYouTubeData(String userId, YouTubeApiWrapper ytConnection) {
-		if (!db.isHealthy()) {
+		if (!db.isHealthy() && !db.refreshConnection()) {
 			log.severe("Database connection not healthy! Aborting YouTube synchronization.");
 			return -1;
 		}
 		// Add database entry that user data is currently being updated
 		int updateId = db.addDbUpdate(userId);
 
-		// TODO this seems terribly inefficient... if you have any ideas, let me know
 		// TODO add check that update was correct, otherwise people would be pretty pissed about unsuccessful synchs
 		HashMap<String, ArrayList<YouTubeVideo>> videoData = ytConnection.getYouTubeWatchData();
 		int dbInsertions = 0;
@@ -257,73 +259,21 @@ public class YouTubeRecommendations extends RESTService {
 			if (videoData.get(rating) == null)
 				continue;
 			ArrayList<YouTubeVideo> videoRatings = videoData.get(rating);
-			// System.out.println("");
-			// System.out.print(rating + ":");
-			Iterator<YouTubeVideo> videoIt = videoRatings.iterator();
-			// Not sure how many videos can be requested at once, so let's stick to 10 for now
-			String[] videoIdList = new String[10];
-			int itemCount = 0;
-			while (videoIt.hasNext()) {
-				YouTubeVideo ytVideo = videoIt.next();
-				// System.out.print(ytVideo.getVideoId() + " ");
-				db.addRating(ytVideo.getVideoId(), userId, rating);
+			for (YouTubeVideo video : videoRatings) {
+				db.addVideo(video);
+				db.addRating(video.getVideoId(), userId, rating);
 				dbInsertions++;
-				// Check whether video data is complete
-				if (!ytVideo.isComplete()) {
-					// First, check database
-					YouTubeVideo dbVideo = db.getVideoById(ytVideo.getVideoId());
-					if (dbVideo != null)
-						ytVideo = dbVideo;
-					else {
-						// Otherwise, request data from YouTube Data API, but bundle requests to save quota tokens
-						videoIdList[itemCount] = ytVideo.getVideoId();
-						itemCount++;
-						if (itemCount == 10 || !videoIt.hasNext()) {
-							// Add video data to database
-							for (YouTubeVideo newVideo : YouTubeApiWrapper.getVideoDetails(videoIdList,
-									flow.getRequestInitializer())) {
-											db.addVideo(newVideo);
-											dbInsertions++;
-											// Ignore comments for now (take up quota and aren't used)
-//											ArrayList<YouTubeComment> comments =
-//												YouTubeApiWrapper.
-//												getComments(newVideo.getVideoId(),
-//												flow.getRequestInitializer());
-//											if (comments == null)
-//					    							continue;
-//											for (YouTubeComment comment : comments) {
-//												db.addComment(comment);
-//												dbInsertions++;
-//											}
-							}
-							itemCount = 0;
-							videoIdList = new String[10];
-						}
-					}
-				}
-				// Assume that video insertion failing means the video had already been added before
-				// Which also means, once recorded, comments don't get updated
-				if (db.addVideo(ytVideo)) {
-					dbInsertions++;
-//					ArrayList<YouTubeComment> comments =
-//							YouTubeApiWrapper.getComments(ytVideo.getVideoId(), flow.getRequestInitializer());
-//					if (comments == null)
-//					    continue;
-//					for (YouTubeComment comment : comments) {
-//						db.addComment(comment);
-//						dbInsertions++;
-//					}
-				}
 			}
 		}
-		// Lastly store alpha value and update database to signify that user synchronized DB
+		// Update database to signify that user synchronized DB
+		if (updateId != -1)
+			db.updateDbUpdate(updateId, "success");
+		// Lastly store alpha value
 		try {
 			Context context = Context.getCurrent();
 			Envelope env = context.createEnvelope(getAlphaHandle(userId));
 			env.setContent(0.5);
 			context.storeEnvelope(env);
-			if (updateId != -1)
-				db.updateDbUpdate(updateId, "success");
 		} catch(Exception e) {
 			log.printStackTrace(e);
 		}
@@ -545,7 +495,7 @@ public class YouTubeRecommendations extends RESTService {
 	 * @return Whether database insertion was successful
 	 */
 	public boolean insertOneTimeCode(String oneTimeCode, Double alpha, Double cf, Double w2v) {
-		if (db.isHealthy())
+		if (db.isHealthy() || db.refreshConnection())
 			return db.addOneTimeCode(oneTimeCode, alpha, cf, w2v);
 		return false;
 	}
@@ -588,15 +538,33 @@ public class YouTubeRecommendations extends RESTService {
 				continue;
 			// Compute similarity based on collaborative filtering
 			double cfVal = 0;
-			ArrayList<Double> matchMfVector = mfModel.get(matchId);
+			ArrayList<Double> matchMfVec = mfModel.get(matchId);
+			if (matchMfVec == null) {
+			    log.info("No MF-model stored for user " + matchId);
+			    continue;
+			}
+			if (userMfVec.size() != matchMfVec.size()) {
+			    log.severe("MF-Vector size mismatch!\n" + userMfVec.toString() + '\n' +
+			    		matchMfVec.toString());
+			    continue;
+			}
 			for (int i = 0; i < userMfVec.size(); i++)
-				cfVal += Math.pow(userMfVec.get(i) - matchMfVector.get(i), 2);
+				cfVal += Math.pow(userMfVec.get(i) - matchMfVec.get(i), 2);
 			cfVal = Math.sqrt(cfVal);
 			if (cfVal > maxCfVal)
 				maxCfVal = cfVal;
 			// Compute similarity based on word2vec vectors
 			double w2vVal = 0;
 			ArrayList<Double> matchW2vVec = w2vModel.get(matchId);
+			if (matchW2vVec == null) {
+			    log.info("No W2V-model stored for user " + matchId);
+			    continue;
+			}
+			if (userW2vVec.size() != matchW2vVec.size()) {
+			    log.severe("W2V-Vector size mismatch!\n" + userW2vVec.toString() + '\n' +
+			    		matchW2vVec.toString());
+			    continue;
+			}
 			for (int i = 0; i < userW2vVec.size(); i++)
 				w2vVal += Math.pow(userW2vVec.get(i) - matchW2vVec.get(i), 2);
 			w2vVal = Math.sqrt(w2vVal);
@@ -620,7 +588,7 @@ public class YouTubeRecommendations extends RESTService {
 			maxW2vVal = 1;
 		// Compute best matching value (cfVal should be as high as possible, w2vVal as low as possible)
 		String bestMatchId = null;
-		double bestMatchVal = 0;
+		double bestMatchVal = -9999.0;
 		for (String matchId : matchVals.keySet()) {
 			if (userId.equals(matchId))
 				continue;
@@ -635,7 +603,7 @@ public class YouTubeRecommendations extends RESTService {
 			}
 		}
 		// Add request to database (not the original intended function of request String)
-		insertOneTimeCode(request, alpha, maxCfVal, maxW2vVal);
+		insertOneTimeCode(request, alpha, matchVals.get(bestMatchId).a(), matchVals.get(bestMatchId).b());
 		return bestMatchId;
 	}
 
@@ -665,7 +633,7 @@ public class YouTubeRecommendations extends RESTService {
 			return buildResponse(401, "Unable to get user agent. Are you logged in?");
 		}
 
-		if (!db.isHealthy())
+		if (!db.isHealthy() && !db.refreshConnection())
 			return buildResponse(500, "No database connection!");
 
 		HashMap<String, String> watchData = db.getRatingsByUserId(userId);
@@ -698,7 +666,7 @@ public class YouTubeRecommendations extends RESTService {
 		}
 
 		// Check whether user already updated their watch data in the last two weeks
-		if (!db.isHealthy())
+		if (!db.isHealthy() && !db.refreshConnection())
 			return buildResponse(500, "No database connection!");
 		Long lastUpdate = db.getLastDbUpdate(userId);
 		if (lastUpdate == 0L)
@@ -748,7 +716,7 @@ public class YouTubeRecommendations extends RESTService {
 			return Response.status(401).entity("Unable to get user agent. Are you logged in?").build();
 		}
 
-		if (!db.isHealthy())
+		if (!db.isHealthy() && !db.refreshConnection())
 			return Response.serverError().entity("No database connection!").build();
 		if (db.deleteRatingsByUserId(userId))
 			return Response.ok().build();
@@ -937,7 +905,7 @@ public class YouTubeRecommendations extends RESTService {
 					message = "OK") })
 	public Response createMfModel() {
 		// Check if service is set up correctly
-		if (!db.isHealthy())
+		if (!db.isHealthy() && !db.refreshConnection())
 			return buildResponse(500, "No database connection!");
 		if (mlUrl == null)
 			return buildResponse(500, "No connection to remote machine learning implementation!");
@@ -1000,7 +968,7 @@ public class YouTubeRecommendations extends RESTService {
 					message = "OK") })
 	public Response computeW2V() {
 		// Check if service is set up correctly
-		if (!db.isHealthy())
+		if (!db.isHealthy() && !db.refreshConnection())
 			return buildResponse(500, "No database connection!");
 		if (mlUrl == null)
 			return buildResponse(500, "No connection to remote machine learning implementation!");
@@ -1126,7 +1094,7 @@ public class YouTubeRecommendations extends RESTService {
 		try {
 			// Check database
 			YouTubeVideo videoData = null;
-			if (db.isHealthy())
+			if (db.isHealthy() || db.refreshConnection())
 				videoData = db.getVideoById(videoId);
 			// No success? Use Data API
 			if (videoData == null) {
@@ -1139,8 +1107,9 @@ public class YouTubeRecommendations extends RESTService {
 			if (videoData == null)
 				return buildResponse(404, "No video found for ID " + videoId);
 			// Record the information that user has watched the requested video
-			if (db.isHealthy())
-				db.addRating(videoId, userId, "watch");
+			// (or don't because of privacy)
+			// if (db.isHealthy())
+			// 	db.addRating(videoId, userId, "watch");
 			return buildResponse(200, videoData.toString());
 		} catch (Exception e) {
 			log.printStackTrace(e);
@@ -1148,37 +1117,67 @@ public class YouTubeRecommendations extends RESTService {
 		}
 	}
 
-//	/**
-//	 * TODO remove, just here for debugging
-//	 *
-//	 * @return nothin'
-//	 */
-//	@GET
-//	@Path("/match")
-//	@Produces(MediaType.TEXT_PLAIN)
-//	@ApiOperation(
-//			value = "YouTube",
-//			notes = "Calls find match function")
-//	@ApiResponses(
-//			value = { @ApiResponse(
-//					code = HttpURLConnection.HTTP_OK,
-//					message = "OK") })
-//	public Response findMatch() {
-//		try {
-//			String userId = getUserId((UserAgent) Context.getCurrent().getMainAgent());
-//		} catch (Exception e) {
-//			log.printStackTrace(e);
-//			return buildResponse(401, "Unable to get user agent. Are you logged in?");
-//		}
-//
-//		try {
-//			findMatch(db.getUserIds(), "");
-//			return Response.ok().build();
-//		} catch (Exception e) {
-//			log.printStackTrace(e);
-//			return Response.serverError().build();
-//		}
-//	}
+	/**
+	 * This function is there to complete missing video data in the database
+	 *
+	 * @return Amount of updated videos
+	 */
+	@GET
+	@Path("/synch")
+	@Produces(MediaType.TEXT_PLAIN)
+	@ApiOperation(
+			value = "YouTube",
+			notes = "Try to complete YT video data")
+	@ApiResponses(
+			value = { @ApiResponse(
+					code = HttpURLConnection.HTTP_OK,
+					message = "OK") })
+	public Response completeVideos() {
+		try {
+			String userId = getUserId((UserAgent) Context.getCurrent().getMainAgent());
+		} catch (Exception e) {
+			log.printStackTrace(e);
+			return buildResponse(401, "Unable to get user agent. Are you logged in?");
+		}
+
+		int dbInsertions = 0;
+		try {
+			ArrayList<YouTubeVideo> incompleteVideos = db.incompleteVideos();
+			Iterator<YouTubeVideo> videoIt = incompleteVideos.iterator();
+			// Not sure how many videos can be requested at once, so let's stick to 10 for now
+			String[] videoIdList = new String[10];
+			int itemCount = 0;
+			while (videoIt.hasNext()) {
+				YouTubeVideo ytVideo = videoIt.next();
+				// Request data from YouTube Data API, but bundle requests to save quota tokens
+				videoIdList[itemCount] = ytVideo.getVideoId();
+				itemCount++;
+				if (itemCount == 10 || !videoIt.hasNext()) {
+					// Add video data to database
+					for (YouTubeVideo newVideo : YouTubeApiWrapper.getVideoDetails(videoIdList,
+							flow.getRequestInitializer())) {
+						db.addVideo(newVideo);
+						dbInsertions++;
+						// Ignore comments for now (take up quota and aren't used)
+//						ArrayList<YouTubeComment> comments = YouTubeApiWrapper.getComments(newVideo.getVideoId(),
+//								flow.getRequestInitializer());
+//						if (comments == null)
+//							continue;
+//						for (YouTubeComment comment : comments) {
+//							db.addComment(comment);
+//							dbInsertions++;
+//						}
+					}
+					itemCount = 0;
+					videoIdList = new String[10];
+				}
+			}
+		} catch (Exception e) {
+			log.printStackTrace(e);
+			return Response.serverError().build();
+		}
+		return Response.ok().entity(String.valueOf(dbInsertions) + " videos updated!").build();
+	}
 
 	/**
 	 * Stores the sent user observation in MySQL database

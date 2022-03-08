@@ -174,8 +174,9 @@ public class YouTubeApiWrapper {
      * Creates the YouTube Data API connection with the given credentials
      *
      * @param credential Access credentials for the YouTube Data API
+     * @return Whether connection was successfully established
      */
-    public void refreshConnection(Credential credential) {
+    public boolean refreshConnection(Credential credential) {
         this.credential = credential;
         try {
             ytConnection = new YouTube.Builder(new ApacheHttpTransport(), new GsonFactory(), credential)
@@ -183,7 +184,9 @@ public class YouTubeApiWrapper {
         } catch (Exception e) {
             log.printStackTrace(e);
             ytConnection = null;
+            return false;
         }
+        return true;
     }
 
     /**
@@ -195,11 +198,12 @@ public class YouTubeApiWrapper {
     private JsonArray getRatedVideos(String rating) {
         if (ytConnection == null)
             return null;
+        JsonArray videos = null;
         try {
             HttpRequest request = ytConnection.videos().list("snippet").setMyRating(rating)
                     .setMaxResults(Integer.toUnsignedLong(500)).buildHttpRequest();
             JsonObject response = new Gson().fromJson(request.execute().parseAsString(), JsonObject.class);
-            JsonArray videos = response.get("items").getAsJsonArray();
+            videos = response.get("items").getAsJsonArray();
             while (response.has("nextPageToken")) {
                 request = ytConnection.videos().list("snippet").setMyRating(rating)
                         .setMaxResults(Integer.toUnsignedLong(500))
@@ -209,9 +213,12 @@ public class YouTubeApiWrapper {
                 videos.addAll(response.get("items").getAsJsonArray());
             }
             return videos;
+        } catch (com.google.api.client.googleapis.json.GoogleJsonResponseException e) {
+            // I'm assuming we ran out of quota, so just return, what's there
+            log.warning("Looks like, we've run out of quota");
+            return videos;
         } catch (Exception e) {
-            // TODO improve error handling and only set ytConnection as invalid, if exception is actually related to it
-            ytConnection = null;
+            // TODO improve error handling
             log.printStackTrace(e);
             return null;
         }
@@ -239,6 +246,7 @@ public class YouTubeApiWrapper {
     private JsonArray getSubscriptions() {
         if (ytConnection == null)
             return null;
+        JsonArray videos = null;
         try {
             // Get Subscribed channels
             HttpRequest request = ytConnection.subscriptions().list("snippet").setMine(true)
@@ -255,11 +263,11 @@ public class YouTubeApiWrapper {
             }
 
             // Get videos
-            JsonArray videos = new JsonArray();
+            videos = new JsonArray();
             for (JsonElement jsonObj : subscriptions) {
                 request = ytConnection.search().list("id")
                         .set("channelId",jsonObj.getAsJsonObject().get("snippet").getAsJsonObject().get("resourceId")
-                                .getAsJsonObject().get("channelId").getAsString())
+                            .getAsJsonObject().get("channelId").getAsString())
                         .setMaxResults(Integer.toUnsignedLong(500)).buildHttpRequest();
                 log.info("Sending request: " + request.getUrl().toString());
                 response = new Gson().fromJson(request.execute().parseAsString(), JsonObject.class);
@@ -274,9 +282,12 @@ public class YouTubeApiWrapper {
 //				}
             }
             return videos;
+        } catch (com.google.api.client.googleapis.json.GoogleJsonResponseException e) {
+            // I'm assuming we ran out of quota, so just return, what's there
+            log.warning("Looks like, we've run out of quota");
+            return videos;
         } catch (Exception e) {
-            // TODO improve error handling and only set ytConnection as invalid, if exception is actually related to it
-            ytConnection = null;
+            // TODO improve error handling
             log.printStackTrace(e);
             return null;
         }
@@ -290,6 +301,7 @@ public class YouTubeApiWrapper {
     private JsonArray getPlaylists() {
         if (ytConnection == null)
             return null;
+        JsonArray videos = null;
         try {
             // Get Playlists
             HttpRequest request = ytConnection.playlists().list("snippet").setMine(true)
@@ -308,7 +320,7 @@ public class YouTubeApiWrapper {
 
             // Get videos from playlists
             Iterator<JsonElement> it = playlists.iterator();
-            JsonArray videos = new JsonArray();
+            videos = new JsonArray();
             while (it.hasNext()) {
                 request = ytConnection.playlistItems().list("contentDetails")
                         .setPlaylistId(it.next().getAsJsonObject().get("id").getAsString())
@@ -325,9 +337,12 @@ public class YouTubeApiWrapper {
 //				}
             }
             return videos;
+        } catch (com.google.api.client.googleapis.json.GoogleJsonResponseException e) {
+            // I'm assuming we ran out of quota, so just return, what's there
+            log.warning("Looks like, we've run out of quota");
+            return videos;
         } catch (Exception e) {
-            // TODO improve error handling and only set ytConnection as invalid, if exception is actually related to it
-            ytConnection = null;
+            // TODO improve error handling
             log.printStackTrace(e);
             return null;
         }
@@ -423,7 +438,6 @@ public class YouTubeApiWrapper {
             return null;
         }
         ArrayList<YouTubeVideo> videoList = new ArrayList<YouTubeVideo>();
-        HashSet<String> videoIds = new HashSet<String>();
         for (JsonElement jsonObj : videoArray) {
             try {
                 JsonObject searchResult = jsonObj.getAsJsonObject();
@@ -457,16 +471,11 @@ public class YouTubeApiWrapper {
             return null;
         }
         ArrayList<YouTubeVideo> videoList = new ArrayList<YouTubeVideo>();
-        Iterator<JsonElement> it = videoArray.iterator();
-        ArrayList<String> videoIds = new ArrayList<String>();
-        while (it.hasNext()) {
+        for (JsonElement videoObj : videoArray) {
             try {
-                videoIds.add(it.next().getAsJsonObject().get("contentDetails").getAsJsonObject().get("videoId").getAsString());
-                if (videoIds.size() >= 10 || !it.hasNext()) {
-                    videoList.addAll(getVideoDetails(videoIds.toArray(new String[videoArray.size()]),
-                            ytConnection.getRequestFactory().getInitializer()));
-                    videoIds.clear();
-                }
+                // Since subscription response is incomplete, just add IDs now and get video details later
+                videoList.add(new YouTubeVideo(videoObj.getAsJsonObject().get("contentDetails").getAsJsonObject()
+                        .get("videoId").getAsString(), null, null, null, null, null, -1, null));
             } catch (Exception e) {
                 log.printStackTrace(e);
                 continue;
@@ -478,7 +487,7 @@ public class YouTubeApiWrapper {
     /**
      * Helper function to retrieve YouTube watch data via established connection
      *
-     * @return YouTubeVideo array with all relevant video data
+     * @return YouTubeVideo array with all relevant video IDs
      */
     public HashMap<String, ArrayList<YouTubeVideo>> getYouTubeWatchData() {
         HashMap<String, ArrayList<YouTubeVideo>> videoData = new HashMap<String, ArrayList<YouTubeVideo>>();

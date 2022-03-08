@@ -30,7 +30,11 @@ import static org.apache.commons.lang3.StringUtils.split;
 public class DataBaseConnection {
 
     private static final L2pLogger log = L2pLogger.getInstance(YouTubeRecommendations.class.getName());
-    Connection connection;
+    private Connection connection;
+    private String host;
+    private String database;
+    private String username;
+    private String password;
     boolean healthy;
 
     /**
@@ -43,6 +47,10 @@ public class DataBaseConnection {
      */
     public DataBaseConnection(String host, String database, String username, String password) {
         // TODO add variable for DB port, I suppose
+        this.host = host;
+        this.database = database;
+        this.username = username;
+        this.password = password;
         try {
             connection = DriverManager.getConnection("jdbc:mysql://" + host + '/' + database +
                     "?useSSL=false", username, password);
@@ -60,6 +68,24 @@ public class DataBaseConnection {
      * @return Whether connection is healthy
      */
     public boolean isHealthy() {
+        return healthy;
+    }
+
+    /**
+     * Function to recreate database connection
+     *
+     * @return Whether connection establishment was successful
+     */
+    public boolean refreshConnection() {
+        try {
+            connection = DriverManager.getConnection("jdbc:mysql://" + host + '/' + database +
+                    "?useSSL=false", username, password);
+            healthy = true;
+            log.info("Successfully re-established MySQL connection");
+        } catch (Exception e) {
+            log.printStackTrace(e);
+            healthy = false;
+        }
         return healthy;
     }
 
@@ -212,6 +238,11 @@ public class DataBaseConnection {
             statement.setInt(6, video.getCategoryId());
             statement.setString(7, video.getUploadDate());
             statement.execute();
+        } catch (java.sql.SQLNonTransientConnectionException e) {
+            log.info("Connection timed out, trying to reconnect");
+            if (refreshConnection())
+                return addVideo(video);
+            return false;
         } catch (java.sql.SQLIntegrityConstraintViolationException e) {
             log.info("Video " + video.getVideoId() + " already in database.");
             return false;
@@ -258,6 +289,11 @@ public class DataBaseConnection {
             statement.setString(3, rating);
             statement.execute();
             return true;
+        } catch (java.sql.SQLNonTransientConnectionException e) {
+            log.info("Connection timed out, trying to reconnect");
+            if (refreshConnection())
+                return addRating(videoId, userId, rating);
+            return false;
         } catch (Exception e) {
             log.printStackTrace(e);
             return false;
@@ -284,6 +320,11 @@ public class DataBaseConnection {
             statement.setInt(6, comment.getLikeCount());
             statement.execute();
             return true;
+        } catch (java.sql.SQLNonTransientConnectionException e) {
+            log.info("Connection timed out, trying to reconnect");
+            if (refreshConnection())
+                return addComment(comment);
+            return false;
         } catch (Exception e) {
             log.printStackTrace(e);
             return false;
@@ -307,6 +348,11 @@ public class DataBaseConnection {
             statement.setString(2, vectorToString(videoVector));
             statement.execute();
             return true;
+        } catch (java.sql.SQLNonTransientConnectionException e) {
+            log.info("Connection timed out, trying to reconnect");
+            if (refreshConnection())
+                return addVideoCenter(videoId, videoVector);
+            return false;
         } catch (Exception e) {
             log.printStackTrace(e);
             return false;
@@ -331,6 +377,11 @@ public class DataBaseConnection {
             ResultSet resultSet = statement.executeQuery();
             resultSet.next();
             return resultSet.getInt("MaxId");
+        } catch (java.sql.SQLNonTransientConnectionException e) {
+            log.info("Connection timed out, trying to reconnect");
+            if (refreshConnection())
+                return addDbUpdate(userId);
+	    return -1;
         } catch (Exception e) {
             log.printStackTrace(e);
             return -1;
@@ -354,6 +405,11 @@ public class DataBaseConnection {
             statement.setInt(2, id);
             statement.execute();
             return true;
+        } catch (java.sql.SQLNonTransientConnectionException e) {
+            log.info("Connection timed out, trying to reconnect");
+            if (refreshConnection())
+                return updateDbUpdate(id, status);
+	    return false;
         } catch (Exception e) {
             log.printStackTrace(e);
             return false;
@@ -381,6 +437,11 @@ public class DataBaseConnection {
             statement.setDouble(4, w2v);
             statement.execute();
             return true;
+	} catch (java.sql.SQLNonTransientConnectionException e) {
+            log.info("Connection timed out, trying to reconnect");
+	    if (refreshConnection())
+                return addOneTimeCode(id, alpha, cf, w2v);
+	    return false;
         } catch (Exception e) {
             log.printStackTrace(e);
             return false;
@@ -400,12 +461,20 @@ public class DataBaseConnection {
             return false;
         try {
             PreparedStatement statement = connection.prepareStatement(
-                    "update oneTimeCodes set noVideos = ?, noHelpful = ? where id = ?");
-            statement.setInt(1, noVideos);
-            statement.setInt(2, noHelpful);
-            statement.setString(3, id);
+                    "insert into oneTimeCodes (id, noVideos, noHelpful) values (?, ?, ?) " +
+                    " on duplicate key update noVideos = ?, noHelpful = ?");
+            statement.setString(1, id);
+            statement.setInt(2, noVideos);
+            statement.setInt(3, noHelpful);
+            statement.setInt(4, noVideos);
+            statement.setInt(5, noHelpful);
             statement.execute();
             return true;
+        } catch (java.sql.SQLNonTransientConnectionException e) {
+            log.info("Connection timed out, trying to reconnect");
+            if (refreshConnection())
+                return updateObservationData(id, noVideos, noHelpful);
+	    return false;
         } catch (Exception e) {
             log.printStackTrace(e);
             return false;
@@ -452,6 +521,11 @@ public class DataBaseConnection {
             resultSet = statement.executeQuery();
             while (resultSet.next())
                 tags.add(resultSet.getString("tag"));
+        } catch (java.sql.SQLNonTransientConnectionException e) {
+            log.info("Connection timed out, trying to reconnect");
+            if (refreshConnection())
+                return getVideoById(videoId);
+            return null;
         } catch (Exception e) {
             log.printStackTrace(e);
             return null;
@@ -478,6 +552,11 @@ public class DataBaseConnection {
             ResultSet resultSet = statement.executeQuery();
             while (resultSet.next())
                 videoRatings.put(resultSet.getString("userId"), resultSet.getString("rating"));
+        } catch (java.sql.SQLNonTransientConnectionException e) {
+            log.info("Connection timed out, trying to reconnect");
+            if (refreshConnection())
+                return getRatingsByVideoId(videoId);
+            return null;
         } catch (Exception e) {
             log.printStackTrace(e);
             return null;
@@ -504,6 +583,11 @@ public class DataBaseConnection {
             ResultSet resultSet = statement.executeQuery();
             while (resultSet.next())
                 userRatings.put(resultSet.getString("videoId"), resultSet.getString("rating"));
+        } catch (java.sql.SQLNonTransientConnectionException e) {
+            log.info("Connection timed out, trying to reconnect");
+            if (refreshConnection())
+                return getRatingsByUserId(userId);
+            return null;
         } catch (Exception e) {
             log.printStackTrace(e);
             return null;
@@ -535,6 +619,11 @@ public class DataBaseConnection {
                         resultSet.getString("channelId"),
                         resultSet.getString("publishDate"),
                         resultSet.getInt("likeCount")));
+        } catch (java.sql.SQLNonTransientConnectionException e) {
+            log.info("Connection timed out, trying to reconnect");
+            if (refreshConnection())
+                return getCommentsByVideoId(videoId);
+            return null;
         } catch (Exception e) {
             log.printStackTrace(e);
             return null;
@@ -570,6 +659,11 @@ public class DataBaseConnection {
                     ratings.put(userId, userRatings);
                 }
             }
+        } catch (java.sql.SQLNonTransientConnectionException e) {
+            log.info("Connection timed out, trying to reconnect");
+            if (refreshConnection())
+                return getAllRatings();
+            return null;
         } catch (Exception e) {
             log.printStackTrace(e);
             return null;
@@ -595,6 +689,11 @@ public class DataBaseConnection {
             while (resultSet.next()) {
                 userIds.add(resultSet.getString("userId"));
             }
+        } catch (java.sql.SQLNonTransientConnectionException e) {
+            log.info("Connection timed out, trying to reconnect");
+            if (refreshConnection())
+                return getUserIds();
+            return null;
         } catch (Exception e) {
             log.printStackTrace(e);
             return null;
@@ -621,6 +720,11 @@ public class DataBaseConnection {
                 return new ArrayList<Double>();
             }
             return stringToVector(resultSet.getString("vector"));
+        } catch (java.sql.SQLNonTransientConnectionException e) {
+            log.info("Connection timed out, trying to reconnect");
+            if (refreshConnection())
+                return getVideoCenter(videoId);
+            return null;
         } catch (Exception e) {
             log.printStackTrace(e);
             return null;
@@ -656,10 +760,45 @@ public class DataBaseConnection {
             if (status.equals("ongoing"))
                 return 0L;
             return timeSinceLastUpdate;
+        } catch (java.sql.SQLNonTransientConnectionException e) {
+            log.info("Connection timed out, trying to reconnect");
+            if (refreshConnection())
+                return getLastDbUpdate(userId);
+            return null;
         } catch (Exception e) {
             log.printStackTrace(e);
             return null;
         }
+    }
+
+    public ArrayList<YouTubeVideo> incompleteVideos() {
+        if (!healthy)
+            return null;
+        ArrayList<YouTubeVideo> incompleteVideos = new ArrayList<YouTubeVideo>();
+        try {
+            // TODO we do not detect missing tags this way
+            PreparedStatement statement = connection.prepareStatement(
+                    "select * from ytVideos where channelId is null or title is null or description is null or " +
+                            "thumbnailUrl is null or categoryId = -1 or uploadDate is null");
+            ResultSet resultSet = statement.executeQuery();
+            while (resultSet.next()) {
+                // Get video information
+                resultSet = statement.executeQuery();
+                resultSet.next();
+                incompleteVideos.add(new YouTubeVideo(resultSet.getString("id"), resultSet.getString("channelId"),
+                        resultSet.getString("title"), resultSet.getString("description"), resultSet.getString("thumbnailUrl"),
+                        null, resultSet.getInt("categoryId"), resultSet.getString("uploadDate")));
+            }
+        } catch (java.sql.SQLNonTransientConnectionException e) {
+            log.info("Connection timed out, trying to reconnect");
+            if (refreshConnection())
+                return incompleteVideos();
+            return null;
+        } catch (Exception e) {
+            log.printStackTrace(e);
+            return null;
+        }
+        return incompleteVideos;
     }
 
     /**
@@ -677,6 +816,11 @@ public class DataBaseConnection {
                     "delete from ytRatings where userId = ?");
             statement.setString(1, userId);
             ResultSet resultSet = statement.executeQuery();
+        } catch (java.sql.SQLNonTransientConnectionException e) {
+            log.info("Connection timed out, trying to reconnect");
+            if (refreshConnection())
+                return deleteRatingsByUserId(userId);
+            return false;
         } catch (Exception e) {
             log.printStackTrace(e);
             return false;
