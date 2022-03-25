@@ -13,7 +13,7 @@ WORKDIR /src
 # run the rest as unprivileged user
 USER las2peer
 RUN chmod +x gradlew && ./gradlew build --exclude-task test
-RUN cp youtube_recommendations/export/jars/i5.las2peer.services.hyeYouTubeRecommendations-0.2.0.jar lib/
+RUN cp youtube_recommendations/export/jars/* lib/
 
 EXPOSE $LAS2PEER_PORT
 ENTRYPOINT ["/src/docker-entrypoint.sh"]

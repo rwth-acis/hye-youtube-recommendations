@@ -229,7 +229,8 @@ public class DataBaseConnection {
         try {
             // Add video data ...
             PreparedStatement statement = connection.prepareStatement(
-                    "insert into ytVideos values (?, ?, ? , ?, ?, ?, ?)");
+                    "insert into ytVideos values (?, ?, ?, ?, ?, ?, ?) on duplicate key update channelId = ?, " +
+                    " title = ?, description = ?, thumbnailUrl = ?, categoryId = ?, uploadDate = ?");
             statement.setString(1, video.getVideoId());
             statement.setString(2, video.getChannelId());
             statement.setString(3, video.getTitle());
@@ -237,14 +238,17 @@ public class DataBaseConnection {
             statement.setString(5, video.getThumbnailUrl());
             statement.setInt(6, video.getCategoryId());
             statement.setString(7, video.getUploadDate());
+            statement.setString(8, video.getChannelId());
+            statement.setString(9, video.getTitle());
+            statement.setString(10, video.getDescription());
+            statement.setString(11, video.getThumbnailUrl());
+            statement.setInt(12, video.getCategoryId());
+            statement.setString(13, video.getUploadDate());
             statement.execute();
         } catch (java.sql.SQLNonTransientConnectionException e) {
             log.info("Connection timed out, trying to reconnect");
             if (refreshConnection())
                 return addVideo(video);
-            return false;
-        } catch (java.sql.SQLIntegrityConstraintViolationException e) {
-            log.info("Video " + video.getVideoId() + " already in database.");
             return false;
         } catch (Exception e) {
             log.printStackTrace(e);
@@ -783,8 +787,6 @@ public class DataBaseConnection {
             ResultSet resultSet = statement.executeQuery();
             while (resultSet.next()) {
                 // Get video information
-                resultSet = statement.executeQuery();
-                resultSet.next();
                 incompleteVideos.add(new YouTubeVideo(resultSet.getString("id"), resultSet.getString("channelId"),
                         resultSet.getString("title"), resultSet.getString("description"), resultSet.getString("thumbnailUrl"),
                         null, resultSet.getInt("categoryId"), resultSet.getString("uploadDate")));

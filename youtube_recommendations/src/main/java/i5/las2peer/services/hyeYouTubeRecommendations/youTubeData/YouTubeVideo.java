@@ -15,11 +15,27 @@ public class YouTubeVideo {
     private String videoId;
     private String channelId;
     private String title;
+    private String channelTitle;
     private String description;
     private String thumbnailUrl;
     private String[] tags;
     private int categoryId;
     private String uploadDate;
+    private long viewCount;
+
+    public YouTubeVideo(String videoId, String channelId, String title, String channelTitle, String description,
+                        String thumbnailUrl, String[] tags, int categoryId, String uploadDate, long viewCount) {
+        this.videoId = videoId;
+        this.channelId = channelId;
+        this.title = title;
+        this.channelTitle = channelTitle;
+        this.description = description;
+        this.thumbnailUrl = thumbnailUrl;
+        this.tags = tags;
+        this.categoryId = categoryId;
+        this.uploadDate = uploadDate;
+        this.viewCount = viewCount;
+    }
 
     public YouTubeVideo(String videoId, String channelId, String title, String description, String thumbnailUrl,
                         String[] tags, int categoryId, String uploadDate) {
@@ -55,6 +71,14 @@ public class YouTubeVideo {
 
     public void setTitle(String title) {
         this.title = title;
+    }
+
+    public String channelTitle() {
+        return channelTitle;
+    }
+
+    public void setChannelTitle(String channelTitle) {
+        this.channelTitle = channelTitle;
     }
 
     public String getDescription() {
@@ -97,20 +121,37 @@ public class YouTubeVideo {
         this.uploadDate = uploadDate;
     }
 
+    public long getViewCount() {
+        return viewCount;
+    }
+
+    public void setViewCount(long viewCount) {
+        this.viewCount = viewCount;
+    }
+
+    // Channel title and view count is not required
     public boolean isComplete() {
         return videoId != null && channelId != null && title != null && description != null && thumbnailUrl != null &&
                 tags != null && categoryId != -1 && uploadDate != null;
     }
+    
+    public JsonObject toJson() {
+        JsonObject json = new JsonObject();
+        json.addProperty("videoId", videoId);
+        json.addProperty("channelId", channelId);
+        json.addProperty("channelTitle", channelTitle);
+        json.addProperty("title", title);
+        json.addProperty("description", description);
+        json.addProperty("thumbnailUrl", thumbnailUrl);
+        json.addProperty("tags", Arrays.toString(tags));
+        json.addProperty("categoryId", categoryId);
+        json.addProperty("uploadDate", uploadDate);
+        json.addProperty("viewCount", viewCount);
+        return json;
+    }
 
     @Override
     public String toString() {
-        return "{\"videoId\":\"" + videoId + "\"," +
-            "\"channelId\":\"" + channelId + "\"," +
-            "\"title\":\"" + title + "\"," +
-            "\"description\":\"" + description + "\"," +
-            "\"thumbnailUrl\":\"" + thumbnailUrl + "\"," +
-            "\"tags\":" + Arrays.toString(tags) + "," +
-            "\"categoryId\":\"" + categoryId + "\"," +
-            "\"uploadDate\":\"" + uploadDate + "\"";
+        return toJson().toString();
     }
 }

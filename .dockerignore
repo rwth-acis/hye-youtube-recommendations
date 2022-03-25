@@ -1,0 +1,8 @@
+*.txt
+*.sql
+*.json
+node-storage/
+log/
+service/
+.git/
+.idea/

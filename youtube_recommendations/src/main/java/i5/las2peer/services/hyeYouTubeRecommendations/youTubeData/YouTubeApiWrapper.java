@@ -53,8 +53,9 @@ public class YouTubeApiWrapper {
         try {
             YouTube ytConnection = new YouTube.Builder(new ApacheHttpTransport(), new GsonFactory(), initializer)
                     .setApplicationName("How's your Experience").build();
-            HttpRequest request = ytConnection.videos().list("snippet").setId(videoIdString)
-                    .setFields("items(snippet(title,description,tags,channelId,categoryId,publishedAt,thumbnails))")
+            HttpRequest request = ytConnection.videos().list("snippet,statistics").setId(videoIdString)
+                    .setFields("items(id,snippet(title,description,tags,channelTitle,channelId,categoryId," +
+                    "publishedAt,thumbnails),statistics(viewCount))")
                     .setMaxResults(Integer.toUnsignedLong(500)).setKey(apiKey).buildHttpRequest();
             log.info("Sending request: " + request.getUrl().toString());
             JsonObject response = new Gson().fromJson(request.execute().parseAsString(), JsonObject.class);
@@ -358,10 +359,12 @@ public class YouTubeApiWrapper {
         String id = null;
         String channelId = null;
         String title = null;
+        String channelTitle = null;
         String description = null;
         String thumbnailUrl = null;
         String[] tags = null;
         int categoryId = -1;
+        long viewCount = -1;
         String publishedAt = null;
         if (videoObj.has("id"))
             id = videoObj.get("id").getAsString();
@@ -378,6 +381,8 @@ public class YouTubeApiWrapper {
             channelId = snippet.get("channelId").getAsString();
         if (snippet.has("title"))
             title = snippet.get("title").getAsString();
+        if (snippet.has("channelTitle"))
+            channelTitle = snippet.get("channelTitle").getAsString();
         if (snippet.has("description"))
             description = snippet.get("description").getAsString();
         if (snippet.has("thumbnails") &&
@@ -391,6 +396,8 @@ public class YouTubeApiWrapper {
                     .replaceAll("]", "").split(",");
         if (snippet.has("categoryId"))
             categoryId = snippet.get("categoryId").getAsInt();
+        if (videoObj.has("statistics") && videoObj.get("statistics").getAsJsonObject().has("viewCount"))
+            viewCount = videoObj.get("statistics").getAsJsonObject().get("viewCount").getAsLong();
         if (snippet.has("publishedAt"))
             publishedAt = snippet.get("publishedAt").getAsString();
 
@@ -403,7 +410,8 @@ public class YouTubeApiWrapper {
                         description + ", " + thumbnailUrl + ", " + tags + ", " + categoryId + ", " + publishedAt);
             }
         }
-        return new YouTubeVideo(id, channelId, title, description, thumbnailUrl, tags, categoryId, publishedAt);
+        return new YouTubeVideo(id, channelId, title, channelTitle, description, thumbnailUrl, tags, categoryId,
+                publishedAt, viewCount);
     }
 
     /**

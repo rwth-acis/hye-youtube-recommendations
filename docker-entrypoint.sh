@@ -36,10 +36,7 @@ if [ -n "$MY_SQL_USER_NAME" ]; then
     sed -i "s|mysqlUser = newuser|mysqlUser = ${MY_SQL_USER_NAME}|" "${SERVICE_PROPERTY_FILE}"
 fi
 if [ -n "$MY_SQL_USER_PW" ]; then
-    sed -i "s|mysqlPassword = changeMe|mysqlPassword = ${MY_SQL_USER_PW}|" "${SERVICE_PROPERTY_FILE}"
-fi
-if [ -n "$MY_SQL_USER_PW" ]; then
-    sed -i "s|mysqlPassword = changeMe|mysqlPassword = ${MY_SQL_USER_PW}|" "${SERVICE_PROPERTY_FILE}"
+    sed -i "s|mysqlPassword = changeme|mysqlPassword = ${MY_SQL_USER_PW}|" "${SERVICE_PROPERTY_FILE}"
 fi
 if [ -n "$ML_LIB_URL" ]; then
     sed -i "s|mlLibUrl = http://localhost:8000/|mlLibUrl = ${ML_LIB_URL}|" "${SERVICE_PROPERTY_FILE}"

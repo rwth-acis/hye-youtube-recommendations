@@ -91,7 +91,6 @@ public class YouTubeRecommendations extends RESTService {
 	private String serviceAgentPw;
 	private String rootUri;
 
-	// TODO change user based word2vec storage to service based
 	private String LOGIN_URI;
 	private String AUTH_URI;
 	private final String MF_MODEL_SUFFIX = "_MF-Model";
@@ -142,15 +141,15 @@ public class YouTubeRecommendations extends RESTService {
 			log.severe("!!! Provided mlLibUrl is invalid. The functionality of the service is severely limited !!!");
 			mlUrl = null;
 		}
-		// Try to unlock provided user
-		try {
-			Context context = Context.getCurrent();
-			UserAgent serviceAgent = (UserAgent) context.fetchAgent(
-					context.getUserAgentIdentifierByLoginName(serviceAgentName));
-			serviceAgent.unlock(serviceAgentPw);
-		} catch (Exception e) {
-			log.severe("!!! Provided service agent credentials are invalid. Prepare for many errors !!!");
-		}
+		// Try to unlock provided user (not working correctly)
+//		try {
+//			Context context = Context.getCurrent();
+//			UserAgent serviceAgent = (UserAgent) context.fetchAgent(
+//					context.getUserAgentIdentifierByLoginName(serviceAgentName));
+//			serviceAgent.unlock(serviceAgentPw);
+//		} catch (Exception e) {
+//			log.severe("!!! Provided service agent credentials are invalid. Prepare for many errors !!!");
+//		}
 	}
 
 	private Response buildResponse(int status, String msg) {
@@ -889,11 +888,51 @@ public class YouTubeRecommendations extends RESTService {
 	}
 
 	/**
+	 * Retrieves the Matrix Factorization model from the network storage
+	 *
+	 * @return The Matrix Factorization user vectors stored in the network storage
+	 */
+	@GET
+	@Path("/matrix-factorization")
+	@Produces(MediaType.APPLICATION_JSON)
+	@ApiOperation(
+			value = "Retrieves MF model",
+			notes = "Returns MF user features")
+	@ApiResponses(
+			value = { @ApiResponse(
+					code = HttpURLConnection.HTTP_OK,
+					message = "OK") })
+	public Response getMfModel() {
+		Context context;
+		Gson gson = new Gson();
+		// Only node/service admins are allowed to call this function
+		try {
+			context = Context.getCurrent();
+			if (!context.getMainAgent().getIdentifier().equals(
+					context.getUserAgentIdentifierByLoginName(serviceAgentName)))
+				return buildResponse(403, "This function can only be called by service agent!");
+		} catch (Exception e) {
+			return buildResponse(401, "Could not get execution context. Are you logged in?");
+		}
+		try {
+			HashMap<String, ArrayList<Double>> featureVectors = (HashMap<String, ArrayList<Double>>)
+					getEnvelopeContent(context, getMatrixHandle());
+			JsonObject mfJson = new JsonObject();
+			for (String userId : featureVectors.keySet())
+				mfJson.add(userId, gson.fromJson(gson.toJson(featureVectors.get(userId)), JsonArray.class));
+			return buildResponse(200, mfJson.toString());
+		} catch (Exception e) {
+			log.printStackTrace(e);
+			return buildResponse(500, "Error getting Matrix Factorization model!");
+		}
+	}
+
+	/**
 	 * Computes a Matrix Factorization model from the rating data stored in the linked database
 	 *
 	 * @return The user's feature vectors computed based on the given rating data
 	 */
-	@GET
+	@POST
 	@Path("/matrix-factorization")
 	@Produces(MediaType.APPLICATION_JSON)
 	@ApiOperation(
@@ -903,7 +942,9 @@ public class YouTubeRecommendations extends RESTService {
 			value = { @ApiResponse(
 					code = HttpURLConnection.HTTP_OK,
 					message = "OK") })
-	public Response createMfModel() {
+	public Response createMfModel(@DefaultValue("") @QueryParam("rank") String rankParam,
+								  @DefaultValue("") @QueryParam("iterations") String iterationsParam,
+								  @DefaultValue("") @QueryParam("lambda") String lambdaParam) {
 		// Check if service is set up correctly
 		if (!db.isHealthy() && !db.refreshConnection())
 			return buildResponse(500, "No database connection!");
@@ -933,7 +974,38 @@ public class YouTubeRecommendations extends RESTService {
 		ratingMappings.put("playlist", 2.0);
 		ratingMappings.put("like", 3.0);
 
+		int rank = 0;
+		int iterations = 0;
+		double lambda = 0;
+		if (rankParam.length() > 0) {
+			try {
+				rank = Integer.parseInt(rankParam);
+			} catch (Exception e) {
+				log.printStackTrace(e);
+			}
+		}
+		if (iterationsParam.length() > 0) {
+			try {
+				iterations = Integer.parseInt(iterationsParam);
+			} catch (Exception e) {
+				log.printStackTrace(e);
+			}
+		}
+		if (lambdaParam.length() > 0) {
+			try {
+				lambda = Double.parseDouble(lambdaParam);
+			} catch (Exception e) {
+				log.printStackTrace(e);
+			}
+		}
+
 		MlLibWrapper mlLib = new MlLibWrapper(mlUrl, ratingMappings);
+		if (rank > 0)
+			mlLib.setRank(rank);
+		if (iterations > 0)
+			mlLib.setIterations(iterations);
+		if (lambda > 0 && lambda < 1)
+			mlLib.setLambda(lambda);
 		JsonObject remoteServiceResponse = mlLib.trainModel(
 				modelName, ratingData);
 		if (remoteServiceResponse == null)
@@ -949,13 +1021,53 @@ public class YouTubeRecommendations extends RESTService {
 	}
 
 	/**
+	 * Retrieves the Word2Vec model from the network storage
+	 *
+	 * @return The Word2Vec user vectors stored in the network storage
+	 */
+	@GET
+	@Path("/word2vec")
+	@Produces(MediaType.APPLICATION_JSON)
+	@ApiOperation(
+			value = "Retrieves W2V model",
+			notes = "Returns W2V user features")
+	@ApiResponses(
+			value = { @ApiResponse(
+					code = HttpURLConnection.HTTP_OK,
+					message = "OK") })
+	public Response getW2V() {
+		Context context;
+		Gson gson = new Gson();
+		// Only node/service admins are allowed to call this function
+		try {
+			context = Context.getCurrent();
+			if (!context.getMainAgent().getIdentifier().equals(
+					context.getUserAgentIdentifierByLoginName(serviceAgentName)))
+				return buildResponse(403, "This function can only be called by service agent!");
+		} catch (Exception e) {
+			return buildResponse(401, "Could not get execution context. Are you logged in?");
+		}
+		try {
+			HashMap<String, ArrayList<Double>> w2vVectors = (HashMap<String, ArrayList<Double>>)
+					getEnvelopeContent(context, getMatrixHandle());
+			JsonObject w2vJson = new JsonObject();
+			for (String userId : w2vVectors.keySet())
+				w2vJson.add(userId, gson.fromJson(gson.toJson(w2vVectors.get(userId)), JsonArray.class));
+			return buildResponse(200, w2vJson.toString());
+		} catch (Exception e) {
+			log.printStackTrace(e);
+			return buildResponse(500, "Error getting Word2Vec model!");
+		}
+	}
+
+	/**
 	 * Sends requests to the remote word2vec implementation to compute the center of the textual video data stored in
 	 * the database for the requesting user
 	 * TODO restrict access, normal users should not be able to trigger this function (due to computational overhead)
 	 *
 	 * @return The user's word vector computed based on the given video text data
 	 */
-	@GET
+	@POST
 	@Path("/word2vec")
 	@Produces(MediaType.APPLICATION_JSON)
 	@ApiOperation(
