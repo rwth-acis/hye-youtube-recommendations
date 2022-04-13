@@ -87,19 +87,6 @@ Thus, if this service is not available, a large part of the service functionalit
 The database credentials, API keys, and service locations, as well as additional configuration parameters, are passed via the `./etc/i5.las2peer.services.hyeYouTubeRecommendations.YouTubeRecommendations.properties` file.
 Below, a table with the configuration options and their purpose is provided.
 
-clientId = ID
-clientSecret = SECRET
-apiKey = KEY
-mysqlHost = localhost
-mysqlDatabase = hye
-mysqlUser = newuser
-mysqlPassword = changeme
-mlLibUrl = http://localhost:8000/
-modelName = HyE-MatrixFactorization
-serviceAgentName = hyeAgent
-serviceAgentPw = changeme
-rootUri = http://localhost:8081/
-
 | Name | Value | Optional | Description |
 | ---- | ----- | -------- | ----------- |
 | `rootUri` | Web URI | No | The root address under which the service is deployed |
