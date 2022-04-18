@@ -1049,7 +1049,7 @@ public class YouTubeRecommendations extends RESTService {
 		}
 		try {
 			HashMap<String, ArrayList<Double>> w2vVectors = (HashMap<String, ArrayList<Double>>)
-					getEnvelopeContent(context, getMatrixHandle());
+					getEnvelopeContent(context, getVectorHandle());
 			JsonObject w2vJson = new JsonObject();
 			for (String userId : w2vVectors.keySet())
 				w2vJson.add(userId, gson.fromJson(gson.toJson(w2vVectors.get(userId)), JsonArray.class));
